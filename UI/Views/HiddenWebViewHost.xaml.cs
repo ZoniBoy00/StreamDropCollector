@@ -699,6 +699,7 @@ namespace UI.Views
 
             // Still wait for it (in case it's a real nav)
             await WaitForNavigationAsync();
+            await WaitForDomReadyAsync();
         }
         /// <summary>
         /// Executes the specified JavaScript code asynchronously in the context of the current web page.
@@ -734,6 +735,28 @@ namespace UI.Views
 
             WebView.CoreWebView2.NavigationCompleted += handler;
             return tcs.Task;
+        }
+        /// <summary>
+        /// Asynchronously waits until the web view's DOM is fully loaded and ready for interaction.
+        /// </summary>
+        /// <remarks>Use this method to ensure that subsequent operations on the web view are performed
+        /// only after the DOM has finished loading. This is particularly useful when interacting with dynamic content
+        /// or scripts that depend on the DOM being fully constructed.</remarks>
+        /// <returns>A task that completes when the DOM is in a ready state.</returns>
+        public async Task WaitForDomReadyAsync()
+        {
+            while (true)
+            {
+                string result = await WebView.ExecuteScriptAsync(
+                    "document.readyState"
+                );
+
+                // result comes back as a quoted string: "\"complete\""
+                if (result.Contains("complete", StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                await Task.Delay(50);
+            }
         }
         /// <summary>
         /// Asynchronously retrieves the raw byte data of the first image found at the specified URL.

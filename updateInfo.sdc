@@ -1,8 +1,13 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "type": "Patch",
-  "changelog": "Fixed a bug in prioritizing streamers to watch before general drops",
+  "changelog": "Improved stream selection and monitoring to verify that the watched Twitch or Kick stream matches the required game/category for each drops campaign",
   "historic_versions": [
+    {
+      "version": "1.0.6",
+      "type": "Patch",
+      "changelog": "Fixed a bug in prioritizing streamers to watch before general drops"
+    },
     {
       "version": "1.0.5",
       "type": "Patch",

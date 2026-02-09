@@ -196,6 +196,7 @@ namespace Core.Services
             JsonArray? channels = allow?["channels"]?.AsArray();
 
             bool isGeneralDrop = false;
+            string slug = game?["slug"]?.GetValue<string>() ?? "Unknown Game";
 
             if (channels != null)
             {
@@ -210,7 +211,6 @@ namespace Core.Services
             }
             else
             {
-                string slug = game?["slug"]?.GetValue<string>() ?? "Unknown Game";
                 connectUrls.Add($"https://www.twitch.tv/directory/category/{slug}?filter=drops&sort=VIEWER_COUNT");
                 isGeneralDrop = true;
             }
@@ -266,6 +266,7 @@ namespace Core.Services
             DropsCampaign dropCampaign = new DropsCampaign(
                 Id: id,
                 Name: name,
+                Slug: slug,
                 GameName: gameName,
                 GameImageUrl: gameImage,
                 StartsAt: startsAt,

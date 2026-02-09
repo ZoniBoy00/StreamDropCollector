@@ -317,47 +317,40 @@ namespace Core.Managers
             // Handle Twitch
             if (twitchCampaigns.Count != 0 && TwitchWebView != null)
             {
-                DropsCampaign bestTwitch = SelectBestCampaign(twitchCampaigns);
-                string twitchUrl = await SelectTwitchStreamerForCampaign(bestTwitch);
+                DropsCampaign? bestTwitch = await SelectBestCampaign(twitchCampaigns);
 
-                if (!string.IsNullOrWhiteSpace(twitchUrl))
+                if (bestTwitch != null)
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView.NavigateAsync(twitchUrl));
+                    string twitchUrl = await SelectTwitchStreamerForCampaign(bestTwitch);
 
-                    await Task.Delay(1500);
-
-                    // Dismiss mature content gate if present
-                    await DismissTwitchMatureContentGateAsync();
-
-                    // Set stream to lowest quality
-                    await SetTwitchStreamToLowestQualityAsync();
-                    await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView.ForceRefreshAsync());
-
-                    // === CAPTURE CURRENT CAMPAIGN ===
-                    _currentTwitchCampaign = bestTwitch;
-
-                    // Reset local counter based on server's last known progress
-                    _twitchWatchedSeconds = bestTwitch.Rewards
-                        .Where(r => !r.IsClaimed)
-                        .Sum(r => r.ProgressMinutes * 60); // Total minutes watched so far -> seconds
-
-                    byte initialTwitchPct = CalculateLiveCampaignProgress(bestTwitch, _twitchWatchedSeconds);
-                    byte initialTwitchDropPct = CalculateLiveDropProgress(bestTwitch, _twitchWatchedSeconds);
-                    TwitchProgressChanged?.Invoke(initialTwitchPct, initialTwitchDropPct);
-
-                    System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Twitch stream: {twitchUrl}");
-
-                    DropsReward? soonestTwitch = bestTwitch.Rewards
-                        .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
-                        .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
-                        .FirstOrDefault();
-
-                    if (soonestTwitch != null)
+                    if (!string.IsNullOrWhiteSpace(twitchUrl))
                     {
-                        DateTime est = DateTime.Now.AddMinutes(soonestTwitch.RequiredMinutes - soonestTwitch.ProgressMinutes);
+                        // === CAPTURE CURRENT CAMPAIGN ===
+                        _currentTwitchCampaign = bestTwitch;
 
-                        if (est < nextCheckAt)
-                            nextCheckAt = est;
+                        // Reset local counter based on server's last known progress
+                        _twitchWatchedSeconds = bestTwitch.Rewards
+                            .Where(r => !r.IsClaimed)
+                            .Sum(r => r.ProgressMinutes * 60); // Total minutes watched so far -> seconds
+
+                        byte initialTwitchPct = CalculateLiveCampaignProgress(bestTwitch, _twitchWatchedSeconds);
+                        byte initialTwitchDropPct = CalculateLiveDropProgress(bestTwitch, _twitchWatchedSeconds);
+                        TwitchProgressChanged?.Invoke(initialTwitchPct, initialTwitchDropPct);
+
+                        System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Twitch stream: {twitchUrl}");
+
+                        DropsReward? soonestTwitch = bestTwitch.Rewards
+                            .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
+                            .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
+                            .FirstOrDefault();
+
+                        if (soonestTwitch != null)
+                        {
+                            DateTime est = DateTime.Now.AddMinutes(soonestTwitch.RequiredMinutes - soonestTwitch.ProgressMinutes);
+
+                            if (est < nextCheckAt)
+                                nextCheckAt = est;
+                        }
                     }
                 }
             }
@@ -365,43 +358,37 @@ namespace Core.Managers
             // Handle Kick
             if (kickCampaigns.Count != 0 && KickWebView != null)
             {
-                DropsCampaign bestKick = SelectBestCampaign(kickCampaigns);
-                string kickUrl = await SelectKickStreamerForCampaign(bestKick);
+                DropsCampaign? bestKick = await SelectBestCampaign(kickCampaigns);
 
-                if (!string.IsNullOrWhiteSpace(kickUrl))
+                if (bestKick != null)
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView.NavigateAsync(kickUrl));
-                    await Task.Delay(1500);
+                    string kickUrl = await SelectKickStreamerForCampaign(bestKick);
 
-                    // Dismiss mature content gate if present
-                    await DismissKickMatureContentGateAsync();
-
-                    // Set stream to lowest quality
-                    await SetKickStreamToLowestQualityAsync();
-                    await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView.ForceRefreshAsync());
-
-                    _currentKickCampaign = bestKick;
-                    _kickWatchedSeconds = bestKick.Rewards
-                        .Where(r => !r.IsClaimed)
-                        .Sum(r => r.ProgressMinutes * 60);
-
-                    byte initialKickPct = CalculateLiveCampaignProgress(bestKick, _kickWatchedSeconds);
-                    byte initialKickDropPct = CalculateLiveDropProgress(bestKick, _kickWatchedSeconds);
-                    KickProgressChanged?.Invoke(initialKickPct, initialKickDropPct);
-
-                    System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Kick stream: {kickUrl}");
-
-                    DropsReward? soonestKick = bestKick.Rewards
-                        .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
-                        .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
-                        .FirstOrDefault();
-
-                    if (soonestKick != null)
+                    if (!string.IsNullOrWhiteSpace(kickUrl))
                     {
-                        DateTime est = DateTime.Now.AddMinutes(soonestKick.RequiredMinutes - soonestKick.ProgressMinutes);
+                        _currentKickCampaign = bestKick;
+                        _kickWatchedSeconds = bestKick.Rewards
+                            .Where(r => !r.IsClaimed)
+                            .Sum(r => r.ProgressMinutes * 60);
 
-                        if (est < nextCheckAt)
-                            nextCheckAt = est;
+                        byte initialKickPct = CalculateLiveCampaignProgress(bestKick, _kickWatchedSeconds);
+                        byte initialKickDropPct = CalculateLiveDropProgress(bestKick, _kickWatchedSeconds);
+                        KickProgressChanged?.Invoke(initialKickPct, initialKickDropPct);
+
+                        System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Kick stream: {kickUrl}");
+
+                        DropsReward? soonestKick = bestKick.Rewards
+                            .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
+                            .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
+                            .FirstOrDefault();
+
+                        if (soonestKick != null)
+                        {
+                            DateTime est = DateTime.Now.AddMinutes(soonestKick.RequiredMinutes - soonestKick.ProgressMinutes);
+
+                            if (est < nextCheckAt)
+                                nextCheckAt = est;
+                        }
                     }
                 }
             }
@@ -431,29 +418,32 @@ namespace Core.Managers
         /// Begins periodic monitoring of the health status of the Twitch and Kick streams, triggering a re-evaluation
         /// if either stream is detected as offline.
         /// </summary>
-        /// <remarks>This method sets up a timer to check the online status of both streams every 60
+        /// <remarks>This method sets up a timer to check the online status of both streams every 30
         /// seconds. If either stream is offline, monitoring is temporarily stopped and an immediate re-selection of
         /// streams is initiated. This helps ensure that the application responds promptly to changes in stream
         /// availability.</remarks>
         private void StartStreamHealthMonitoring()
         {
-            _streamHealthTimer = new System.Timers.Timer(30000); // Every 30 seconds
+            _streamHealthTimer = new System.Timers.Timer(30 * 1000); // Every 30 seconds
             _streamHealthTimer.Elapsed += async (s, e) =>
             {
                 // Run the entire check on the UI thread
                 await Application.Current.Dispatcher.InvokeAsync(async () =>
                 {
                     bool twitchOnline = TwitchWebView != null && await IsTwitchStreamOnline();
+                    bool twitchCorrectCategory = TwitchWebView != null && await IsTwitchStreamCategoryCorrect();
                     bool kickOnline = KickWebView != null && await IsKickStreamOnline();
+                    bool kickCorrectCategory = KickWebView != null && await IsKickStreamCategoryCorrect();
 
                     System.Diagnostics.Debug.WriteLine($"[Health Check] Twitch: {(twitchOnline ? "ONLINE" : "OFFLINE")} | Kick: {(kickOnline ? "ONLINE" : "OFFLINE")}");
+                    System.Diagnostics.Debug.WriteLine($"[Health Check] Twitch category correct: {twitchCorrectCategory} | Kick category correct: {kickCorrectCategory}");
 
                     // Group campaigns by platform
                     List<DropsCampaign> twitchCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Twitch && c.HasProgressToMake())];
                     List<DropsCampaign> kickCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Kick && c.HasProgressToMake())];
 
-                    if (twitchCampaigns.Count != 0 && !twitchOnline
-                     || kickCampaigns.Count != 0 && !kickOnline)
+                    if (twitchCampaigns.Count != 0 && (!twitchOnline || !twitchCorrectCategory)
+                     || kickCampaigns.Count != 0 && (!kickOnline || !kickCorrectCategory))
                     {
                         System.Diagnostics.Debug.WriteLine("[Health Check] One or both streams offline -> forcing re-evaluation");
                         _streamHealthTimer?.Stop();
@@ -461,6 +451,7 @@ namespace Core.Managers
                     }
                 });
             };
+
             _streamHealthTimer.AutoReset = true;
             _streamHealthTimer.Start();
         }
@@ -474,9 +465,9 @@ namespace Core.Managers
         /// <param name="campaigns">A list of available campaigns to evaluate. Cannot be null or empty.</param>
         /// <returns>The campaign that has the highest completion percentage. If multiple campaigns share the highest completion
         /// percentage, the campaign closest to earning its next unclaimed reward is selected.</returns>
-        private static DropsCampaign SelectBestCampaign(List<DropsCampaign> campaigns)
+        private async Task<DropsCampaign?> SelectBestCampaign(List<DropsCampaign> campaigns)
         {
-            return campaigns
+            List<DropsCampaign> prioritizedCampaigns = [.. campaigns
                 // 1) Non-general drops first (false), then general drops (true)
                 .OrderBy(c => c.IsGeneralDrop)
 
@@ -484,9 +475,65 @@ namespace Core.Managers
                 .ThenByDescending(c => c.CompletionPercentage())
                 .ThenBy(c => c.Rewards
                     .Where(r => !r.IsClaimed)
-                    .Min(r => r.RequiredMinutes - r.ProgressMinutes))
-                .First();
+                    .Min(r => r.RequiredMinutes - r.ProgressMinutes))];
 
+            foreach (DropsCampaign campaign in prioritizedCampaigns)
+            {
+                if (campaign.Platform == Platform.Twitch)
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(campaign.ConnectUrls[0]));
+                    await Task.Delay(1500);
+
+                    // Dismiss mature content gate if present
+                    await DismissTwitchMatureContentGateAsync();
+
+                    // Set stream to lowest quality
+                    await SetTwitchStreamToLowestQualityAsync();
+                    await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ForceRefreshAsync());
+
+                    await Task.Delay(5000);
+
+                    string getStreamerCategoryJs = @"
+                        (() => {
+                            const streamGameLink = document.querySelector('[data-a-target=stream-game-link]');
+                            return streamGameLink ? streamGameLink.innerText.trim() : '';
+                        })();
+                    ";
+
+                    string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
+
+                    if (categoryResult.Contains(campaign.Slug, StringComparison.OrdinalIgnoreCase))
+                        return campaign;
+                }
+                else if (campaign.Platform == Platform.Kick)
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(campaign.ConnectUrls[0]));
+                    await Task.Delay(1500);
+
+                    // Dismiss mature content gate if present
+                    await DismissKickMatureContentGateAsync();
+
+                    // Set stream to lowest quality
+                    await SetKickStreamToLowestQualityAsync();
+                    await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ForceRefreshAsync());
+
+                    await Task.Delay(5000);
+
+                    string getStreamerCategoryJs = @"
+                        (() => {
+                            const categoryElement = document.querySelector("".text-primary-base"");
+                            return categoryElement ? categoryElement.innerText.trim() : '';
+                        })();
+                    ";
+
+                    string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
+
+                    if (categoryResult.Contains(campaign.Slug, StringComparison.OrdinalIgnoreCase))
+                        return campaign;
+                }
+            }
+
+            return null;
         }
         /// <summary>
         /// Attempts to set the Kick stream playback quality to the lowest available option asynchronously.
@@ -619,7 +666,8 @@ namespace Core.Managers
         /// <returns>A <see langword="true"/> value if the Kick stream is online; otherwise, <see langword="false"/>.</returns>
         private async Task<bool> IsKickStreamOnline()
         {
-            if (KickWebView == null) return false;
+            if (KickWebView == null)
+                return false;
 
             string js = @"
                 (() => {
@@ -639,6 +687,36 @@ namespace Core.Managers
             return isOnline;
         }
         /// <summary>
+        /// Determines whether the current Kick stream category matches the expected category based on the active Kick
+        /// campaign slug.
+        /// </summary>
+        /// <remarks>This method retrieves the category from the Kick web view and compares it to the slug
+        /// of the current Kick campaign. Returns <see langword="false"/> if the web view is not initialized.</remarks>
+        /// <returns>A task that represents the asynchronous operation. The task result contains <see langword="true"/> if the
+        /// Kick stream category matches the current campaign slug; otherwise, <see langword="false"/>.</returns>
+        private async Task<bool> IsKickStreamCategoryCorrect()
+        {
+            if (KickWebView == null)
+                return false;
+
+            string js = @"
+                (() => {
+                    const categoryElement = document.querySelector("".text-primary-base"");
+                    const category = categoryElement ? categoryElement.innerText.trim() : '';
+                    return category;
+                })();
+                ";
+
+            string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView.ExecuteScriptAsync(js));
+            bool isCorrect = rawResult?
+                .Trim()
+                .Trim('"')
+                .Contains(_currentKickCampaign?.Slug ?? "", StringComparison.OrdinalIgnoreCase) ?? false;
+
+            System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Kick stream category correct status: {isCorrect}");
+            return isCorrect;
+        }
+        /// <summary>
         /// Determines whether the Twitch stream is currently live by evaluating the status indicator in the embedded
         /// web view.
         /// </summary>
@@ -649,7 +727,8 @@ namespace Core.Managers
         /// stream is live; otherwise, <see langword="false"/>.</returns>
         private async Task<bool> IsTwitchStreamOnline()
         {
-            if (TwitchWebView == null) return false;
+            if (TwitchWebView == null)
+                return false;
 
             string js = @"
                 (() => {
@@ -666,6 +745,36 @@ namespace Core.Managers
 
             System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Twitch stream online status: {isOnline}");
             return isOnline;
+        }
+        /// <summary>
+        /// Determines whether the current Twitch stream category matches the expected category for the active campaign.
+        /// </summary>
+        /// <remarks>This method retrieves the current category from the Twitch stream by executing a
+        /// JavaScript snippet in the TwitchWebView. The comparison is case-insensitive and ignores leading or trailing
+        /// whitespace. Returns <see langword="false"/> if the TwitchWebView is not initialized.</remarks>
+        /// <returns>A task that represents the asynchronous operation. The task result contains <see langword="true"/> if the
+        /// Twitch stream category matches the expected campaign category; otherwise, <see langword="false"/>.</returns>
+        private async Task<bool> IsTwitchStreamCategoryCorrect()
+        {
+            if (TwitchWebView == null)
+                return false;
+
+            string js = @"
+                (() => {
+                    const streamGameLink = document.querySelector('[data-a-target=stream-game-link]');
+                    const category = streamGameLink ? streamGameLink.innerText.trim() : '';
+                    return category;
+                })();
+                ";
+
+            string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView.ExecuteScriptAsync(js));
+            bool isCorrect = rawResult?
+                .Trim()
+                .Trim('"')
+                .Contains(_currentTwitchCampaign?.Slug ?? "", StringComparison.OrdinalIgnoreCase) ?? false;
+
+            System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Twitch stream category correct status: {isCorrect}");
+            return isCorrect;
         }
         /// <summary>
         /// Selects the appropriate Kick streamer URL for the specified drops campaign.
@@ -732,7 +841,14 @@ namespace Core.Managers
             await Task.Delay(1500);
             string streamerUrl;
 
-            string js = @"
+            string getStreamerCategoryJs = @"
+                (() => {
+                    const streamGameLink = document.querySelector('[data-a-target=stream-game-link]');
+                    return streamGameLink ? streamGameLink.innerText.trim() : '';
+                })();
+            ";
+
+            string getFirstStreamerJs = @"
                 (() => {
                     const firstItem = document.querySelector('div[data-target=""directory-first-item""]');
                     if (!firstItem) return '';
@@ -741,12 +857,19 @@ namespace Core.Managers
                 })();
             ";
 
-            string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(js));
+            string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
+
+            if (!categoryResult.Equals(campaign.Slug, StringComparison.OrdinalIgnoreCase))
+            {
+                // This happens if the streamer is online, but not streaming the game associated with the campaign. In this case, we need to select the next best streamer, and retry again.
+            }
+
+            string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getFirstStreamerJs));
 
             if (!campaign.IsGeneralDrop)
                 streamerUrl = campaign.ConnectUrls[0];
             else
-                streamerUrl = rawResult?.Trim().Trim('"') ?? "";
+                streamerUrl = firstStreamerRawResult?.Trim().Trim('"') ?? "";
 
             System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Selected Twitch streamer URL for campaign '{campaign.Name}': {streamerUrl}");
             TwitchChannelChanged?.Invoke(GetStreamerNameFromUrl(streamerUrl));

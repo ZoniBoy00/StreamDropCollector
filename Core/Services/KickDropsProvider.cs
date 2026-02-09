@@ -58,13 +58,13 @@ namespace Core.Services
                     JsonElement category = campaign.GetProperty("category");
 
                     DropsReward[] rewards = [.. campaign.GetProperty("rewards")
-                .EnumerateArray()
-                .Select(r => new DropsReward(
-                    Id: r.GetProperty("id").GetString()!,
-                    Name: r.GetProperty("name").GetString()!,
-                    ImageUrl: "https://ext.cdn.kick.com/" + r.GetProperty("image_url").GetString(),
-                    RequiredMinutes: r.GetProperty("required_units").GetInt32()
-                ))];
+                        .EnumerateArray()
+                        .Select(r => new DropsReward(
+                            Id: r.GetProperty("id").GetString()!,
+                            Name: r.GetProperty("name").GetString()!,
+                            ImageUrl: "https://ext.cdn.kick.com/" + r.GetProperty("image_url").GetString(),
+                            RequiredMinutes: r.GetProperty("required_units").GetInt32()
+                        ))];
 
                     if (rewards.Length == 0)
                         continue;
@@ -101,6 +101,7 @@ namespace Core.Services
                     campaigns.Add(new DropsCampaign(
                         Id: campaign.GetProperty("id").GetString()!,
                         Name: campaign.GetProperty("name").GetString()!,
+                        Slug: category.GetProperty("slug").GetString()!,
                         GameName: category.GetProperty("name").GetString()!,
                         GameImageUrl: category.GetProperty("image_url").GetString(),
                         StartsAt: DateTimeOffset.Parse(campaign.GetProperty("starts_at").GetString()!),

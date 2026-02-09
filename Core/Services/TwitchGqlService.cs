@@ -223,9 +223,16 @@ namespace Core.Services
                 return false;
 
             response.EnsureSuccessStatusCode();
-            JsonNode? result = JsonNode.Parse(jsonText);
+            JsonNode? root = JsonNode.Parse(jsonText);
+            JsonNode? result = root?[0];
 
-            return result?["data"]?["claimDropRewards"]?["isUserAccountConnected"]?.GetValue<bool>() ?? false;
+            bool isConnected = result?["data"]?
+                        ["claimDropRewards"]?
+                        ["isUserAccountConnected"]?
+                        .GetValue<bool>()
+                  ?? false;
+
+            return isConnected;
         }
         /// <summary>
         /// Queries the Twitch Drops dashboard and returns the full dashboard data as a JSON object.

@@ -132,6 +132,14 @@ namespace Core.Interfaces
         /// <returns>A task that represents the asynchronous wait operation. The task completes when the navigation has finished.</returns>
         Task WaitForNavigationAsync();
         /// <summary>
+        /// Asynchronously waits until the Document Object Model (DOM) is fully loaded and ready for interaction.
+        /// </summary>
+        /// <remarks>Use this method to ensure that all DOM elements are available before executing
+        /// scripts or performing operations that depend on the DOM structure. This is particularly important in
+        /// scenarios where scripts may run before the DOM is fully constructed.</remarks>
+        /// <returns>A task that represents the asynchronous wait operation. The task completes when the DOM is ready.</returns>
+        Task WaitForDomReadyAsync();
+        /// <summary>
         /// Asynchronously retrieves the image data from the specified URL as a byte array.
         /// </summary>
         /// <param name="imageUrl">The URL of the image to download. Must be a valid, absolute URI pointing to an accessible image resource.</param>

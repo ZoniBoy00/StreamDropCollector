@@ -35,6 +35,7 @@ namespace Core.Models
     public record DropsCampaign(
         string Id,
         string Name,
+        string Slug,
         string GameName,
         string? GameImageUrl,
         DateTimeOffset StartsAt,
