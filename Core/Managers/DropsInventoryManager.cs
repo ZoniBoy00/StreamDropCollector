@@ -2,6 +2,7 @@
 using Core.Interfaces;
 using System.Windows;
 using System.Timers;
+using System.Threading;
 using Core.Models;
 using Core.Enums;
 
@@ -36,6 +37,10 @@ namespace Core.Managers
         private readonly System.Timers.Timer _liveProgressTimer = new(1000);
         private System.Timers.Timer? _recheckTimer;
         private System.Timers.Timer? _streamHealthTimer;
+
+        private readonly SemaphoreSlim _startWatchingLock = new(1, 1);
+        private CancellationTokenSource? _startWatchingCts;
+        private bool _isPaused;
 
         private DropsInventoryManager()
         {
@@ -147,7 +152,7 @@ namespace Core.Managers
         /// After updating, the method initiates stream watching for the active campaigns.</remarks>
         /// <param name="campaigns">A collection of <see cref="DropsCampaign"/> objects to evaluate and update as active campaigns. Only
         /// campaigns that have progress to make, have started, and have not yet ended are considered.</param>
-        public void UpdateCampaigns(IEnumerable<DropsCampaign> campaigns, IGqlService? twitchGqlService)
+        public void UpdateCampaigns(IEnumerable<DropsCampaign> campaigns, IGqlService? twitchGqlService, bool startWatching = true)
         {
             _twitchGqlService = twitchGqlService;
 
@@ -162,7 +167,34 @@ namespace Core.Managers
                 UpdateCurrentSelectionFlags();
             });
 
-            _ = StartWatchingStreams(); // Fire and forget - will handle its own loop
+            if (startWatching && !_isPaused)
+                _ = StartWatchingStreams(); // Fire and forget - will handle its own loop
+        }
+        /// <summary>
+        /// Temporarily pauses stream watching and waits for any active watch cycle to exit.
+        /// </summary>
+        public async Task PauseWatchingAsync()
+        {
+            _isPaused = true;
+            _startWatchingCts?.Cancel();
+
+            _recheckTimer?.Stop();
+            _streamHealthTimer?.Stop();
+            _liveProgressTimer.Stop();
+
+            await _startWatchingLock.WaitAsync();
+            _startWatchingLock.Release();
+        }
+        /// <summary>
+        /// Resumes stream watching if it was previously paused.
+        /// </summary>
+        public async Task ResumeWatchingAsync()
+        {
+            if (!_isPaused)
+                return;
+
+            _isPaused = false;
+            await StartWatchingStreams();
         }
         /// <summary>
         /// Calculates the overall progress percentage for unclaimed rewards in a campaign based on the total number of
@@ -219,217 +251,269 @@ namespace Core.Managers
         /// <returns>A task that represents the asynchronous operation of starting and managing stream monitoring.</returns>
         public async Task StartWatchingStreams(bool restartedInternally = false)
         {
-            System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] Starting stream watching process...");
-            if (!restartedInternally)
-                MinerStatusChanged?.Invoke("Starting");
-            else
-                MinerStatusChanged?.Invoke("Evaluating");
-
-            // Stop any existing timer
-            _recheckTimer?.Stop();
-            _streamHealthTimer?.Stop();
-            _recheckTimer?.Dispose();
-            _streamHealthTimer?.Dispose();
-
-            _recheckTimer = null;
-            _streamHealthTimer = null;
-
-            if (!ActiveCampaigns.Any())
+            await _startWatchingLock.WaitAsync();
+            try
             {
-                System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] No active campaigns with progress to make. Stopping stream watching.");
-                MinerStatusChanged?.Invoke("Idle");
-                _currentTwitchCampaign = null;
-                _currentKickCampaign = null;
-                UpdateCurrentSelectionFlags();
-                return;
-            }
+                if (_isPaused)
+                    return;
 
-            DateTime nextCheckAt = DateTime.Now.AddHours(1); // Fallback: recheck in 1 hour
+                _startWatchingCts?.Cancel();
+                _startWatchingCts = new CancellationTokenSource();
+                CancellationToken token = _startWatchingCts.Token;
 
-            // Get a list of ready to claim rewards, this means the reward is unclaimed and progress >= required
-            List<DropsReward> readyToClaimRewards = [.. ActiveCampaigns.SelectMany(c => c.Rewards.Where(r => !r.IsClaimed && r.ProgressMinutes >= r.RequiredMinutes))];
+                // Reset current selections and progress
+                TwitchChannelChanged?.Invoke(string.Empty);
+                TwitchProgressChanged?.Invoke(0, 0);
 
-            if (UISettingsManager.Instance.AutoClaimRewards)
-            {
-                // Claim all ready rewards
-                foreach (DropsReward item in readyToClaimRewards)
-                {
-                    DropsCampaign? parentCampaign = ActiveCampaigns.FirstOrDefault(c => c.Rewards.Contains(item));
+                KickChannelChanged?.Invoke(string.Empty);
+                KickProgressChanged?.Invoke(0, 0);
 
-                    // If Twitch, use Gql.ClaimDropAsync()
-                    if (parentCampaign == null)
-                        continue;
+                System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] Starting stream watching process...");
+                if (!restartedInternally)
+                    MinerStatusChanged?.Invoke("Starting");
+                else
+                    MinerStatusChanged?.Invoke("Evaluating");
 
-                    bool claimResult = false;
-                    if (parentCampaign.Platform == Platform.Twitch && _twitchGqlService != null)
-                        claimResult = await _twitchGqlService.ClaimDropAsync(parentCampaign.Id, item.Id);
-                    else if (parentCampaign.Platform == Platform.Kick)
-                        claimResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ClaimKickDropAsync(parentCampaign.Id, item.Id));
-
-                    if (claimResult)
-                    {
-                        // Update ActiveCampaigns: mark reward as claimed and remove campaign if all rewards are claimed
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            // Create updated rewards list with the claimed reward
-                            List<DropsReward> updatedRewards = new List<DropsReward>();
-                            foreach (DropsReward reward in parentCampaign.Rewards)
-                            {
-                                if (reward.Id == item.Id)
-                                    updatedRewards.Add(reward with { IsClaimed = true });
-                                else
-                                    updatedRewards.Add(reward);
-                            }
-
-                            // Check if EVERY reward in the campaign is now claimed
-                            bool allRewardsClaimed = updatedRewards.All(r => r.IsClaimed);
-
-                            // Update the campaign with the new rewards list
-                            DropsCampaign updatedCampaign = parentCampaign with { Rewards = updatedRewards };
-
-                            int index = ActiveCampaigns.IndexOf(parentCampaign);
-                            if (index >= 0)
-                            {
-                                ActiveCampaigns[index] = updatedCampaign;
-                            }
-                        });
-
-                        if (UISettingsManager.Instance.NotifyOnAutoClaimed)
-                            NotificationManager.ShowNotification("Drop Claimed", $"Successfully claimed drop reward: {item.Name}");
-                    }
-                    else
-                    {
-                        nextCheckAt = DateTime.Now.AddMinutes(1);
-                        NotificationManager.ShowNotification("Drop Claim Failed", $"Failed to claim drop reward, re-trying in a minute: {item.Name}");
-                    }
-                }
-            }
-            else if (UISettingsManager.Instance.NotifyOnReadyToClaim)
-            {
-                // Notify user that there are rewards ready to claim
-                NotificationManager.ShowNotification("Drop Ready to Claim", $"You have {readyToClaimRewards.Count} drops rewards ready to claim. Please claim them manually.");
-            }
-
-            // If nothing left to progress after claiming, stop and reset
-            if (!ActiveCampaigns.Any(c => c.HasProgressToMake()))
-            {
-                System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] No campaigns with progress to make after claim. Stopping stream watching.");
-                MinerStatusChanged?.Invoke("Idle");
-                _currentTwitchCampaign = null;
-                _currentKickCampaign = null;
-                _liveProgressTimer.Stop();
-                UpdateCurrentSelectionFlags();
-                return;
-            }
-
-            // Group campaigns by platform
-            List<DropsCampaign> twitchCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Twitch && c.HasProgressToMake())];
-            List<DropsCampaign> kickCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Kick && c.HasProgressToMake())];
-
-            // Handle Twitch
-            if (twitchCampaigns.Count != 0 && TwitchWebView != null)
-            {
-                DropsCampaign? bestTwitch = await SelectBestCampaign(twitchCampaigns);
-
-                if (bestTwitch != null)
-                {
-                    string twitchUrl = await SelectTwitchStreamerForCampaign(bestTwitch);
-
-                    if (!string.IsNullOrWhiteSpace(twitchUrl))
-                    {
-                        // === CAPTURE CURRENT CAMPAIGN ===
-                        _currentTwitchCampaign = bestTwitch;
-
-                        UpdateCurrentSelectionFlags();
-
-                        // Reset local counter based on server's last known progress
-                        _twitchWatchedSeconds = bestTwitch.Rewards
-                            .Where(r => !r.IsClaimed)
-                            .Sum(r => r.ProgressMinutes * 60); // Total minutes watched so far -> seconds
-
-                        byte initialTwitchPct = CalculateLiveCampaignProgress(bestTwitch, _twitchWatchedSeconds);
-                        byte initialTwitchDropPct = CalculateLiveDropProgress(bestTwitch, _twitchWatchedSeconds);
-                        TwitchProgressChanged?.Invoke(initialTwitchPct, initialTwitchDropPct);
-
-                        System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Twitch stream: {twitchUrl}");
-
-                        DropsReward? soonestTwitch = bestTwitch.Rewards
-                            .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
-                            .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
-                            .FirstOrDefault();
-
-                        if (soonestTwitch != null)
-                        {
-                            DateTime est = DateTime.Now.AddMinutes(soonestTwitch.RequiredMinutes - soonestTwitch.ProgressMinutes);
-
-                            if (est < nextCheckAt)
-                                nextCheckAt = est;
-                        }
-                    }
-                }
-            }
-
-            // Handle Kick
-            if (kickCampaigns.Count != 0 && KickWebView != null)
-            {
-                DropsCampaign? bestKick = await SelectBestCampaign(kickCampaigns);
-
-                if (bestKick != null)
-                {
-                    string kickUrl = await SelectKickStreamerForCampaign(bestKick);
-
-                    if (!string.IsNullOrWhiteSpace(kickUrl))
-                    {
-                        _currentKickCampaign = bestKick;
-                        UpdateCurrentSelectionFlags();
-                        _kickWatchedSeconds = bestKick.Rewards
-                            .Where(r => !r.IsClaimed)
-                            .Sum(r => r.ProgressMinutes * 60);
-
-                        byte initialKickPct = CalculateLiveCampaignProgress(bestKick, _kickWatchedSeconds);
-                        byte initialKickDropPct = CalculateLiveDropProgress(bestKick, _kickWatchedSeconds);
-                        KickProgressChanged?.Invoke(initialKickPct, initialKickDropPct);
-
-                        System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Kick stream: {kickUrl}");
-
-                        DropsReward? soonestKick = bestKick.Rewards
-                            .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
-                            .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
-                            .FirstOrDefault();
-
-                        if (soonestKick != null)
-                        {
-                            DateTime est = DateTime.Now.AddMinutes(soonestKick.RequiredMinutes - soonestKick.ProgressMinutes);
-
-                            if (est < nextCheckAt)
-                                nextCheckAt = est;
-                        }
-                    }
-                }
-            }
-
-            // Start periodic health check (every 60 seconds)
-            StartStreamHealthMonitoring();
-            _liveProgressTimer.Start();
-
-            // Set timer to re-evaluate when the next reward is expected to complete (or fallback)
-            double delayMs = Math.Max((nextCheckAt - DateTime.Now).TotalMilliseconds, 60000); // At least 1 min
-
-            _recheckTimer = new System.Timers.Timer(delayMs);
-            _recheckTimer.Elapsed += async (s, e) =>
-            {
+                // Stop any existing timer
                 _recheckTimer?.Stop();
-                System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] Re-evaluating streams for active campaigns.");
-                await StartWatchingStreams(true); // Re-evaluate everything
-            };
+                _streamHealthTimer?.Stop();
+                _recheckTimer?.Dispose();
+                _streamHealthTimer?.Dispose();
 
-            _recheckTimer.AutoReset = false;
-            _recheckTimer.Start();
+                _recheckTimer = null;
+                _streamHealthTimer = null;
 
-            System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Next stream re-evaluation in ~{delayMs / 60000:F1} minutes at {nextCheckAt:u}");
-            MinerStatusChanged?.Invoke("Mining");
+                if (!ActiveCampaigns.Any())
+                {
+                    System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] No active campaigns with progress to make. Stopping stream watching.");
+                    MinerStatusChanged?.Invoke("Idle");
+                    _currentTwitchCampaign = null;
+                    _currentKickCampaign = null;
+                    UpdateCurrentSelectionFlags();
+                    return;
+                }
+
+                if (token.IsCancellationRequested)
+                    return;
+
+                DateTime nextCheckAt = DateTime.Now.AddHours(1); // Fallback: recheck in 1 hour
+
+                // Get a list of ready to claim rewards, this means the reward is unclaimed and progress >= required
+                List<DropsReward> readyToClaimRewards = [.. ActiveCampaigns.SelectMany(c => c.Rewards.Where(r => !r.IsClaimed && r.ProgressMinutes >= r.RequiredMinutes))];
+
+                if (UISettingsManager.Instance.AutoClaimRewards)
+                {
+                    // Claim all ready rewards
+                    foreach (DropsReward item in readyToClaimRewards)
+                    {
+                        DropsCampaign? parentCampaign = ActiveCampaigns.FirstOrDefault(c => c.Rewards.Contains(item));
+
+                        // If Twitch, use Gql.ClaimDropAsync()
+                        if (parentCampaign == null)
+                            continue;
+
+                        bool claimResult = false;
+                        if (parentCampaign.Platform == Platform.Twitch && _twitchGqlService != null)
+                            claimResult = await _twitchGqlService.ClaimDropAsync(parentCampaign.Id, item.Id);
+                        else if (parentCampaign.Platform == Platform.Kick)
+                            claimResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ClaimKickDropAsync(parentCampaign.Id, item.Id));
+
+                        if (claimResult)
+                        {
+                            // Update ActiveCampaigns: mark reward as claimed and remove campaign if all rewards are claimed
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                // Create updated rewards list with the claimed reward
+                                List<DropsReward> updatedRewards = new List<DropsReward>();
+                                foreach (DropsReward reward in parentCampaign.Rewards)
+                                {
+                                    if (reward.Id == item.Id)
+                                        updatedRewards.Add(reward with { IsClaimed = true });
+                                    else
+                                        updatedRewards.Add(reward);
+                                }
+
+                                // Check if EVERY reward in the campaign is now claimed
+                                bool allRewardsClaimed = updatedRewards.All(r => r.IsClaimed);
+
+                                // Update the campaign with the new rewards list
+                                DropsCampaign updatedCampaign = parentCampaign with { Rewards = updatedRewards };
+
+                                int index = ActiveCampaigns.IndexOf(parentCampaign);
+                                if (index >= 0)
+                                {
+                                    ActiveCampaigns[index] = updatedCampaign;
+                                }
+                            });
+
+                            if (UISettingsManager.Instance.NotifyOnAutoClaimed)
+                                NotificationManager.ShowNotification("Drop Claimed", $"Successfully claimed drop reward: {item.Name}");
+                        }
+                        else
+                        {
+                            nextCheckAt = DateTime.Now.AddMinutes(1);
+                            NotificationManager.ShowNotification("Drop Claim Failed", $"Failed to claim drop reward, re-trying in a minute: {item.Name}");
+                        }
+                    }
+                }
+                else if (UISettingsManager.Instance.NotifyOnReadyToClaim)
+                {
+                    // Notify user that there are rewards ready to claim
+                    NotificationManager.ShowNotification("Drop Ready to Claim", $"You have {readyToClaimRewards.Count} drops rewards ready to claim. Please claim them manually.");
+                }
+
+                // If nothing left to progress after claiming, stop and reset
+                if (!ActiveCampaigns.Any(c => c.HasProgressToMake()))
+                {
+                    System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] No campaigns with progress to make after claim. Stopping stream watching.");
+                    MinerStatusChanged?.Invoke("Idle");
+                    _currentTwitchCampaign = null;
+                    _currentKickCampaign = null;
+                    _liveProgressTimer.Stop();
+                    UpdateCurrentSelectionFlags();
+                    return;
+                }
+
+                if (token.IsCancellationRequested)
+                    return;
+
+                // Group campaigns by platform
+                List<DropsCampaign> twitchCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Twitch && c.HasProgressToMake())];
+                List<DropsCampaign> kickCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Kick && c.HasProgressToMake())];
+
+                // Handle Twitch
+                if (twitchCampaigns.Count != 0 && TwitchWebView != null)
+                {
+                    if (token.IsCancellationRequested)
+                        return;
+
+                    DropsCampaign? bestTwitch = await SelectBestCampaign(twitchCampaigns);
+
+                    if (token.IsCancellationRequested)
+                        return;
+
+                    if (bestTwitch != null)
+                    {
+                        string twitchUrl = await SelectTwitchStreamerForCampaign(bestTwitch);
+
+                        if (token.IsCancellationRequested)
+                            return;
+
+                        if (!string.IsNullOrWhiteSpace(twitchUrl))
+                        {
+                            // === CAPTURE CURRENT CAMPAIGN ===
+                            _currentTwitchCampaign = bestTwitch;
+
+                            UpdateCurrentSelectionFlags();
+
+                            // Reset local counter based on server's last known progress
+                            _twitchWatchedSeconds = bestTwitch.Rewards
+                                .Where(r => !r.IsClaimed)
+                                .Sum(r => r.ProgressMinutes * 60); // Total minutes watched so far -> seconds
+
+                            byte initialTwitchPct = CalculateLiveCampaignProgress(bestTwitch, _twitchWatchedSeconds);
+                            byte initialTwitchDropPct = CalculateLiveDropProgress(bestTwitch, _twitchWatchedSeconds);
+                            TwitchProgressChanged?.Invoke(initialTwitchPct, initialTwitchDropPct);
+
+                            System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Twitch stream: {twitchUrl}");
+
+                            DropsReward? soonestTwitch = bestTwitch.Rewards
+                                .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
+                                .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
+                                .FirstOrDefault();
+
+                            if (soonestTwitch != null)
+                            {
+                                DateTime est = DateTime.Now.AddMinutes(soonestTwitch.RequiredMinutes - soonestTwitch.ProgressMinutes);
+
+                            if (est < nextCheckAt)
+                                nextCheckAt = est;
+                            }
+                        }
+                    }
+                }
+
+                // Handle Kick
+                if (kickCampaigns.Count != 0 && KickWebView != null)
+                {
+                    if (token.IsCancellationRequested)
+                        return;
+
+                    DropsCampaign? bestKick = await SelectBestCampaign(kickCampaigns);
+
+                    if (token.IsCancellationRequested)
+                        return;
+
+                    if (bestKick != null)
+                    {
+                        string kickUrl = await SelectKickStreamerForCampaign(bestKick);
+
+                        if (token.IsCancellationRequested)
+                            return;
+
+                        if (!string.IsNullOrWhiteSpace(kickUrl))
+                        {
+                            _currentKickCampaign = bestKick;
+                            UpdateCurrentSelectionFlags();
+                            _kickWatchedSeconds = bestKick.Rewards
+                                .Where(r => !r.IsClaimed)
+                                .Sum(r => r.ProgressMinutes * 60);
+
+                            byte initialKickPct = CalculateLiveCampaignProgress(bestKick, _kickWatchedSeconds);
+                            byte initialKickDropPct = CalculateLiveDropProgress(bestKick, _kickWatchedSeconds);
+                            KickProgressChanged?.Invoke(initialKickPct, initialKickDropPct);
+
+                            System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Watching Kick stream: {kickUrl}");
+
+                            DropsReward? soonestKick = bestKick.Rewards
+                                .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
+                                .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
+                                .FirstOrDefault();
+
+                            if (soonestKick != null)
+                            {
+                                DateTime est = DateTime.Now.AddMinutes(soonestKick.RequiredMinutes - soonestKick.ProgressMinutes);
+
+                            if (est < nextCheckAt)
+                                nextCheckAt = est;
+                            }
+                        }
+                    }
+                }
+
+                // Start periodic health check (every 60 seconds)
+                StartStreamHealthMonitoring();
+                _liveProgressTimer.Start();
+
+                // Set timer to re-evaluate when the next reward is expected to complete (or fallback)
+                double delayMs = Math.Max((nextCheckAt - DateTime.Now).TotalMilliseconds, 60000); // At least 1 min
+
+                _recheckTimer = new System.Timers.Timer(delayMs);
+                _recheckTimer.Elapsed += async (s, e) =>
+                {
+                    _recheckTimer?.Stop();
+                    System.Diagnostics.Debug.WriteLine("[DropsInventoryManager] Re-evaluating streams for active campaigns.");
+                    await StartWatchingStreams(true); // Re-evaluate everything
+                };
+
+                _recheckTimer.AutoReset = false;
+                _recheckTimer.Start();
+
+                System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Next stream re-evaluation in ~{delayMs / 60000:F1} minutes at {nextCheckAt:u}");
+                MinerStatusChanged?.Invoke("Mining");
+            }
+            finally
+            {
+                _startWatchingLock.Release();
+            }
         }
-
+        /// <summary>
+        /// Updates the selection flags for active campaigns and their rewards to reflect the current campaign and
+        /// reward based on the active platform and progress.
+        /// </summary>
+        /// <remarks>This method must be called on the UI thread, as it updates observable collections
+        /// bound to the user interface. It ensures that only one campaign and one reward per platform are marked as
+        /// current at any time. If there are no active campaigns, the method exits without making changes.</remarks>
         private void UpdateCurrentSelectionFlags()
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -490,10 +574,10 @@ namespace Core.Managers
                 // Run the entire check on the UI thread
                 await Application.Current.Dispatcher.InvokeAsync(async () =>
                 {
-                    bool twitchOnline = TwitchWebView != null && await IsTwitchStreamOnline();
-                    bool twitchCorrectCategory = TwitchWebView != null && await IsTwitchStreamCategoryCorrect();
-                    bool kickOnline = KickWebView != null && await IsKickStreamOnline();
-                    bool kickCorrectCategory = KickWebView != null && await IsKickStreamCategoryCorrect();
+                    bool twitchOnline = _currentTwitchCampaign != null && await IsTwitchStreamOnline();
+                    bool twitchCorrectCategory = _currentTwitchCampaign != null && await IsTwitchStreamCategoryCorrect();
+                    bool kickOnline = _currentKickCampaign != null && await IsKickStreamOnline();
+                    bool kickCorrectCategory = _currentKickCampaign != null && await IsKickStreamCategoryCorrect();
 
                     System.Diagnostics.Debug.WriteLine($"[Health Check] Twitch: {(twitchOnline ? "ONLINE" : "OFFLINE")} | Kick: {(kickOnline ? "ONLINE" : "OFFLINE")}");
                     System.Diagnostics.Debug.WriteLine($"[Health Check] Twitch category correct: {twitchCorrectCategory} | Kick category correct: {kickCorrectCategory}");

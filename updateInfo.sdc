@@ -1,8 +1,13 @@
 {
-  "version": "1.0.9",
+  "version": "1.0.10",
   "type": "Patch",
-  "changelog": "Fixed a minor issue where start minimized didn't take effect",
+  "changelog": "Fixed WebView contention during drops refresh and stream watching",
   "historic_versions": [
+    {
+      "version": "1.0.9",
+      "type": "Patch",
+      "changelog": "Fixed a minor issue where start minimized didn't take effect"
+    },
     {
       "version": "1.0.8",
       "type": "Patch",

@@ -251,7 +251,7 @@ namespace UI.Views
                 });
             };
 
-            DropsInventoryManager.Instance.KickChannelChanged += channel => 
+            DropsInventoryManager.Instance.KickChannelChanged += channel =>
             {
                 System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
                 {
@@ -338,6 +338,8 @@ namespace UI.Views
             await _loadDropsSemaphore.WaitAsync();
             try
             {
+                await DropsInventoryManager.Instance.PauseWatchingAsync();
+
                 using CancellationTokenSource cts = new CancellationTokenSource();
                 _currentLoadCts = cts;
 
@@ -358,7 +360,7 @@ namespace UI.Views
                 foreach (DropsCampaign? c in allCampaigns.OrderBy(x => x.GameName))
                     _activeCampaigns.Add(c);
 
-                DropsInventoryManager.Instance.UpdateCampaigns(allCampaigns, _twitchGqlService);
+                DropsInventoryManager.Instance.UpdateCampaigns(allCampaigns, _twitchGqlService, startWatching: false);
 
                 MinerStatus = "Idle";
                 MinerStatusDetails = $"{_activeCampaigns.Count} active campaigns loaded";
@@ -378,6 +380,7 @@ namespace UI.Views
             {
                 _loadDropsSemaphore.Release();
                 _currentLoadCts = null;
+                await DropsInventoryManager.Instance.ResumeWatchingAsync();
             }
         }
         /// <summary>
