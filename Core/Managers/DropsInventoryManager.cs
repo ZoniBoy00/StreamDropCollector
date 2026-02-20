@@ -670,22 +670,26 @@ namespace Core.Managers
 
                     await Task.Delay(5000);
 
-                    string getStreamerCategoryJs = @"
+                    string getStreamerCategoryHrefJs = @"
                         (() => {
-                            const streamGameLink = document.querySelector('[data-a-target=stream-game-link]');
-                            return streamGameLink ? streamGameLink.innerText.trim() : '';
+                            const links = Array.from(document.querySelectorAll('[data-a-target=stream-game-link]'));
+                            return links
+                                .map(link => link?.href?.trim())
+                                .filter(Boolean)
+                                .join('|');
                         })();
                     ";
 
-                    string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
+                    string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+                    bool categoryMatches = TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug);
 
-                    if (categoryResult.Contains(campaign.Slug, StringComparison.OrdinalIgnoreCase))
+                    if (categoryMatches)
                     {
-                        AppLogger.Info("CampaignCheck", $"Twitch campaign '{campaign.Name}' passed category check. category='{categoryResult.Trim('"')}', slug='{campaign.Slug}'");
+                        AppLogger.Info("CampaignCheck", $"Twitch campaign '{campaign.Name}' passed category check. categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
                         return campaign;
                     }
 
-                    AppLogger.Warn("CampaignCheck", $"Twitch campaign '{campaign.Name}' failed category check. category='{categoryResult.Trim('"')}', slug='{campaign.Slug}'");
+                    AppLogger.Warn("CampaignCheck", $"Twitch campaign '{campaign.Name}' failed category check. categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
                 }
                 else if (campaign.Platform == Platform.Kick)
                 {
@@ -948,17 +952,16 @@ namespace Core.Managers
 
             string js = @"
                 (() => {
-                    const streamGameLink = document.querySelector('[data-a-target=stream-game-link]');
-                    const category = streamGameLink ? streamGameLink.innerText.trim() : '';
-                    return category;
+                    const links = Array.from(document.querySelectorAll('[data-a-target=stream-game-link]'));
+                    return links
+                        .map(link => link?.href?.trim())
+                        .filter(Boolean)
+                        .join('|');
                 })();
                 ";
 
             string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView.ExecuteScriptAsync(js));
-            bool isCorrect = rawResult?
-                .Trim()
-                .Trim('"')
-                .Contains(_currentTwitchCampaign?.Slug ?? "", StringComparison.OrdinalIgnoreCase) ?? false;
+            bool isCorrect = TwitchCategoryHrefMatchesCampaign(rawResult, _currentTwitchCampaign?.Slug);
 
             System.Diagnostics.Debug.WriteLine($"[DropsInventoryManager] Twitch stream category correct status: {isCorrect}");
             return isCorrect;
@@ -1028,10 +1031,13 @@ namespace Core.Managers
             await Task.Delay(1500);
             string streamerUrl;
 
-            string getStreamerCategoryJs = @"
+            string getStreamerCategoryHrefJs = @"
                 (() => {
-                    const streamGameLink = document.querySelector('[data-a-target=stream-game-link]');
-                    return streamGameLink ? streamGameLink.innerText.trim() : '';
+                    const links = Array.from(document.querySelectorAll('[data-a-target=stream-game-link]'));
+                    return links
+                        .map(link => link?.href?.trim())
+                        .filter(Boolean)
+                        .join('|');
                 })();
             ";
 
@@ -1044,11 +1050,11 @@ namespace Core.Managers
                 })();
             ";
 
-            string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
+            string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
 
-            if (!categoryResult.Equals(campaign.Slug, StringComparison.OrdinalIgnoreCase))
+            if (!TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
             {
-                AppLogger.Warn("TwitchSelection", $"Initial Twitch URL category mismatch for campaign '{campaign.Name}'. category='{categoryResult.Trim('"')}', slug='{campaign.Slug}'");
+                AppLogger.Warn("TwitchSelection", $"Initial Twitch URL category mismatch for campaign '{campaign.Name}'. categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
             }
 
             string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getFirstStreamerJs));
@@ -1064,6 +1070,16 @@ namespace Core.Managers
             TwitchChannelChanged?.Invoke(GetStreamerNameFromUrl(streamerUrl));
 
             return streamerUrl;
+        }
+
+        private static bool TwitchCategoryHrefMatchesCampaign(string? rawCategoryHrefs, string? campaignSlug)
+        {
+            if (string.IsNullOrWhiteSpace(rawCategoryHrefs) || string.IsNullOrWhiteSpace(campaignSlug))
+                return false;
+
+            string expectedCategoryPath = $"/directory/category/{campaignSlug}";
+            string hrefs = rawCategoryHrefs.Trim().Trim('"');
+            return hrefs.Contains(expectedCategoryPath, StringComparison.OrdinalIgnoreCase);
         }
         /// <summary>
         /// Extracts the streamer name from the specified Twitch or Kick channel URL.

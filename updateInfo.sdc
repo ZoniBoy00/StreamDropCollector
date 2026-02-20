@@ -1,8 +1,13 @@
 {
-  "version": "1.0.11",
+  "version": "1.0.12",
   "type": "Patch",
   "changelog": "Added comprehensive diagnostic logging and a new 'Open Logs Folder' option in Settings",
   "historic_versions": [
+    {
+      "version": "1.0.11",
+      "type": "Patch",
+      "changelog": "Added comprehensive diagnostic logging and a new 'Open Logs Folder' option in Settings"
+    },
     {
       "version": "1.0.10",
       "type": "Patch",
