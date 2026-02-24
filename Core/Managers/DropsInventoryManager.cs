@@ -442,7 +442,7 @@ namespace Core.Managers
                             continue;
                         }
 
-                        await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(twitchUrl));
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(twitchUrl));
                         await Task.Delay(1500);
 
                         // Dismiss mature content gate if present
@@ -450,7 +450,7 @@ namespace Core.Managers
 
                         // Set stream to lowest quality
                         await SetTwitchStreamToLowestQualityAsync();
-                        await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ForceRefreshAsync());
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ForceRefreshAsync());
 
                         await Task.Delay(5000);
 
@@ -544,7 +544,7 @@ namespace Core.Managers
                             continue;
                         }
 
-                        await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(kickUrl));
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(kickUrl));
                         await Task.Delay(1500);
 
                         // Dismiss mature content gate if present
@@ -552,7 +552,7 @@ namespace Core.Managers
 
                         // Set stream to lowest quality
                         await SetKickStreamToLowestQualityAsync();
-                        await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ForceRefreshAsync());
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ForceRefreshAsync());
 
                         await Task.Delay(5000);
 
@@ -711,7 +711,7 @@ namespace Core.Managers
             _streamHealthTimer.Elapsed += async (s, e) =>
             {
                 // Run the entire check on the UI thread
-                await Application.Current.Dispatcher.InvokeAsync(async () =>
+                await await Application.Current.Dispatcher.InvokeAsync(async () =>
                 {
                     bool twitchOnline = _currentTwitchCampaign != null && await IsTwitchStreamOnline();
                     bool twitchCorrectCategory = _currentTwitchCampaign != null && await IsTwitchStreamCategoryCorrect();
@@ -1049,8 +1049,8 @@ namespace Core.Managers
             {
                 foreach (string connectUrl in campaign.ConnectUrls)
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(connectUrl));
-                    await Task.Delay(1500);
+                    await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(connectUrl));
+                    await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.WaitForNetworkIdleAsync(5000, 500));
 
                     string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
 
@@ -1065,7 +1065,7 @@ namespace Core.Managers
             }
             else
             {
-                await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(campaign.ConnectUrls[0]));
+                await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(campaign.ConnectUrls[0]));
                 await Task.Delay(1500);
 
                 string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ExecuteScriptAsync(js));
@@ -1114,8 +1114,8 @@ namespace Core.Managers
             {
                 foreach (string connectUrl in campaign.ConnectUrls)
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(connectUrl));
-                    await Task.Delay(1500);
+                    await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(connectUrl));
+                    await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
 
                     string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
 
@@ -1130,7 +1130,7 @@ namespace Core.Managers
             }
             else
             {
-                await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(campaign.ConnectUrls[0]));
+                await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(campaign.ConnectUrls[0]));
                 await Task.Delay(1500);
 
                 string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getFirstStreamerJs));

@@ -140,6 +140,14 @@ namespace Core.Interfaces
         /// <returns>A task that represents the asynchronous wait operation. The task completes when the DOM is ready.</returns>
         Task WaitForDomReadyAsync();
         /// <summary>
+        /// Asynchronously waits for a network-idle period where no tracked requests are in flight.
+        /// </summary>
+        /// <param name="timeoutMs">Maximum time in milliseconds to wait before returning false if idle is not reached.</param>
+        /// <param name="idleWindowMs">Required continuous idle duration in milliseconds before considering the page settled.</param>
+        /// <param name="ct">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is true if idle is reached; otherwise false on timeout.</returns>
+        Task<bool> WaitForNetworkIdleAsync(int timeoutMs = 15000, int idleWindowMs = 900, CancellationToken ct = default);
+        /// <summary>
         /// Asynchronously retrieves the image data from the specified URL as a byte array.
         /// </summary>
         /// <param name="imageUrl">The URL of the image to download. Must be a valid, absolute URI pointing to an accessible image resource.</param>

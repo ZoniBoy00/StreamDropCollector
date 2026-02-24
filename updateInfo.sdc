@@ -1,9 +1,14 @@
 {
-  "version": "1.0.13",
+  "version": "1.0.14",
   "type": "Patch",
-  "description": "Improved stream selection diagnostics and fixed reward vs campaign progress tracking behavior.",
-  "changelog": "Added verbose debug toggle in Settings, improved Twitch/Kick selection diagnostics, and fixed reward progress percentage tracking while keeping campaign progress tracking intact.",
+  "description": "Improved WebView waiting reliability and dispatcher async handling.",
+  "changelog": "Added a standalone WaitForNetworkIdleAsync helper for generic page settling and fixed dispatcher-invoked async calls that could continue before inner tasks completed.",
   "historic_versions": [
+    {
+      "version": "1.0.13",
+      "type": "Patch",
+      "changelog": "Added verbose debug toggle in Settings, improved Twitch/Kick selection diagnostics, and fixed reward progress percentage tracking while keeping campaign progress tracking intact."
+    },
     {
       "version": "1.0.12",
       "type": "Patch",

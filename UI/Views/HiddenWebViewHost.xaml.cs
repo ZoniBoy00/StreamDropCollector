@@ -1,6 +1,7 @@
 ﻿using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Core.Logging;
 using Core.Interfaces;
@@ -775,6 +776,150 @@ namespace UI.Views
                     break;
 
                 await Task.Delay(50);
+            }
+        }
+        /// <summary>
+        /// Asynchronously waits until the page is network-idle for a continuous period.
+        /// </summary>
+        /// <remarks>This method is site-agnostic and does not depend on specific selectors. It tracks
+        /// network requests via DevTools protocol and returns when no tracked requests are in flight for the
+        /// configured idle window. Long-lived noisy request types such as WebSocket and EventSource are ignored.
+        /// If idle is not reached before the timeout, the method returns <see langword="false"/>.</remarks>
+        /// <param name="timeoutMs">Maximum time to wait before giving up. Must be greater than zero. Default is 15000.</param>
+        /// <param name="idleWindowMs">Continuous idle period required to consider the page settled. Must be greater than zero. Default is 900.</param>
+        /// <param name="ct">Cancellation token used to cancel the wait.</param>
+        /// <returns><see langword="true"/> if idle was reached; otherwise <see langword="false"/> on timeout.</returns>
+        public async Task<bool> WaitForNetworkIdleAsync(int timeoutMs = 15000, int idleWindowMs = 900, CancellationToken ct = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMs);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(idleWindowMs);
+
+            await WebView.CoreWebView2.CallDevToolsProtocolMethodAsync("Network.enable", "{}");
+
+            ConcurrentDictionary<string, byte> inFlightRequests = new ConcurrentDictionary<string, byte>();
+            long lastActivityTick = Environment.TickCount64;
+
+            CoreWebView2DevToolsProtocolEventReceiver requestWillBeSent = WebView.CoreWebView2.GetDevToolsProtocolEventReceiver("Network.requestWillBeSent");
+            CoreWebView2DevToolsProtocolEventReceiver loadingFinished = WebView.CoreWebView2.GetDevToolsProtocolEventReceiver("Network.loadingFinished");
+            CoreWebView2DevToolsProtocolEventReceiver loadingFailed = WebView.CoreWebView2.GetDevToolsProtocolEventReceiver("Network.loadingFailed");
+
+            static bool IsIgnorableType(string? requestType)
+                => string.Equals(requestType, "WebSocket", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(requestType, "EventSource", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(requestType, "Manifest", StringComparison.OrdinalIgnoreCase);
+
+            static bool TryGetRequestMetadata(string json, out string? requestId, out string? requestType, out string? requestUrl)
+            {
+                requestId = null;
+                requestType = null;
+                requestUrl = null;
+
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(json);
+                    JsonElement root = doc.RootElement;
+
+                    if (root.TryGetProperty("requestId", out JsonElement requestIdElement))
+                        requestId = requestIdElement.GetString();
+
+                    if (root.TryGetProperty("type", out JsonElement typeElement))
+                        requestType = typeElement.GetString();
+
+                    if (root.TryGetProperty("request", out JsonElement requestElement) &&
+                        requestElement.TryGetProperty("url", out JsonElement urlElement))
+                    {
+                        requestUrl = urlElement.GetString();
+                    }
+
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            static bool TryGetRequestId(string json, out string? requestId)
+            {
+                requestId = null;
+
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(json);
+                    JsonElement root = doc.RootElement;
+
+                    if (!root.TryGetProperty("requestId", out JsonElement requestIdElement))
+                        return false;
+
+                    requestId = requestIdElement.GetString();
+                    return !string.IsNullOrWhiteSpace(requestId);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            void OnRequestWillBeSent(object? _, CoreWebView2DevToolsProtocolEventReceivedEventArgs e)
+            {
+                if (!TryGetRequestMetadata(e.ParameterObjectAsJson, out string? requestId, out string? requestType, out string? requestUrl))
+                    return;
+
+                if (string.IsNullOrWhiteSpace(requestId))
+                    return;
+
+                if (IsIgnorableType(requestType))
+                    return;
+
+                if (!string.IsNullOrWhiteSpace(requestUrl) &&
+                    (requestUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                     requestUrl.StartsWith("blob:", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+
+                if (inFlightRequests.TryAdd(requestId, 0))
+                    Interlocked.Exchange(ref lastActivityTick, Environment.TickCount64);
+            }
+
+            void OnRequestDone(object? _, CoreWebView2DevToolsProtocolEventReceivedEventArgs e)
+            {
+                if (!TryGetRequestId(e.ParameterObjectAsJson, out string? requestId) || string.IsNullOrWhiteSpace(requestId))
+                    return;
+
+                if (inFlightRequests.TryRemove(requestId, out byte _))
+                    Interlocked.Exchange(ref lastActivityTick, Environment.TickCount64);
+            }
+
+            requestWillBeSent.DevToolsProtocolEventReceived += OnRequestWillBeSent;
+            loadingFinished.DevToolsProtocolEventReceived += OnRequestDone;
+            loadingFailed.DevToolsProtocolEventReceived += OnRequestDone;
+
+            Stopwatch timeout = Stopwatch.StartNew();
+
+            try
+            {
+                while (timeout.ElapsedMilliseconds < timeoutMs)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    if (inFlightRequests.IsEmpty)
+                    {
+                        long idleForMs = Environment.TickCount64 - Interlocked.Read(ref lastActivityTick);
+                        if (idleForMs >= idleWindowMs)
+                            return true;
+                    }
+
+                    await Task.Delay(100, ct);
+                }
+
+                return false;
+            }
+            finally
+            {
+                requestWillBeSent.DevToolsProtocolEventReceived -= OnRequestWillBeSent;
+                loadingFinished.DevToolsProtocolEventReceived -= OnRequestDone;
+                loadingFailed.DevToolsProtocolEventReceived -= OnRequestDone;
             }
         }
         /// <summary>
