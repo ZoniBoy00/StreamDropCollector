@@ -3,10 +3,12 @@
 **A fully automated, open-source drops miner for Twitch.tv and Kick.com**  
 Watch streams in the background, earn campaign rewards, and claim them automatically - all without lifting a finger.
 
-[![GitHub stars](https://img.shields.io/github/stars/tsgsOFFICIAL/StreamDropCollector?style=social)](https://github.com/tsgsOFFICIAL/StreamDropCollector)
+[![Issues](https://img.shields.io/github/issues/tsgsOFFICIAL/StreamDropCollector)](https://github.com/tsgsOFFICIAL/StreamDropCollector/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/tsgsOFFICIAL/StreamDropCollector)](https://github.com/tsgsOFFICIAL/StreamDropCollector/commits/master)
 [![GitHub license](https://img.shields.io/github/license/tsgsOFFICIAL/StreamDropCollector)](https://github.com/tsgsOFFICIAL/StreamDropCollector/blob/master/LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-blueviolet)](https://dotnet.microsoft.com/download)
 [![WPF](https://img.shields.io/badge/WPF-Modern_UI-teal)](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/overview)
+[![GitHub stars](https://img.shields.io/github/stars/tsgsOFFICIAL/StreamDropCollector?style=social)](https://github.com/tsgsOFFICIAL/StreamDropCollector)
 [![Discord](https://img.shields.io/discord/227048721710317569?logo=discord&logoColor=FFF&label=Discord&labelColor=5865F2)](https://discord.gg/Cddu5aJ)
 [![Support on Ko-fi](https://img.shields.io/badge/Support%20me%20on%20Ko--fi-F16061?logo=ko-fi&logoColor=white)](https://ko-fi.com/tsgsOFFICIAL)
 
@@ -41,7 +43,7 @@ _Active campaigns and rewards overview_
 ## Quick Start
 
 1. **Download** the latest release from [Releases](https://github.com/tsgsOFFICIAL/StreamDropCollector/releases/latest) _(recommended)_
-   - or direct folder download: [https://download-directory.github.io/?url=https://github.com/tsgsOFFICIAL/StreamDropCollector/tree/master/UI/bin/Release/net10.0-windows10.0.17763.0/publish/win-x64](https://download-directory.github.io/?url=https://github.com/tsgsOFFICIAL/StreamDropCollector/tree/master/UI/bin/Release/net10.0-windows10.0.17763.0/publish/win-x64)
+    - or direct folder download: [https://download-directory.github.io/?url=https://github.com/tsgsOFFICIAL/StreamDropCollector/tree/master/UI/bin/Release/net10.0-windows10.0.17763.0/publish/win-x64](https://download-directory.github.io/?url=https://github.com/tsgsOFFICIAL/StreamDropCollector/tree/master/UI/bin/Release/net10.0-windows10.0.17763.0/publish/win-x64)
 2. Extract the ZIP
 3. Run `StreamDropCollector.exe`
 4. Log in to Twitch and Kick when the embedded browsers appear
@@ -82,6 +84,7 @@ If you're farming drops 24/7 and want to fuel more rage-fueled coding sessions, 
 ## Contributing
 
 Contributions are welcome! Feel free to:
+
 - Open issues for bugs or suggestions
 - Submit pull requests for improvements
 
