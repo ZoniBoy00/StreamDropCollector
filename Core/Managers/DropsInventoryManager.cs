@@ -118,7 +118,8 @@ namespace Core.Managers
         /// <param name="e">An ElapsedEventArgs object that contains the event data.</param>
         private void OnLiveProgressTick(object? sender, ElapsedEventArgs e)
         {
-            if (_currentTwitchCampaign != null)
+            DropsCampaign? currentTwitchCampaign = _currentTwitchCampaign;
+            if (currentTwitchCampaign != null)
             {
                 _twitchWatchedSeconds++;
                 _twitchDropWatchedSeconds++;
@@ -128,16 +129,17 @@ namespace Core.Managers
                 {
                     int minutesToApply = twitchMinuteBucket - _twitchAppliedMinuteBucket;
                     _twitchAppliedMinuteBucket = twitchMinuteBucket;
-                    ApplyMinuteProgressToActiveCampaign(Platform.Twitch, _currentTwitchCampaign.Id, minutesToApply);
+                    ApplyMinuteProgressToActiveCampaign(Platform.Twitch, currentTwitchCampaign.Id, minutesToApply);
                 }
 
-                byte twitchCampPct = CalculateLiveCampaignProgress(_currentTwitchCampaign, _twitchWatchedSeconds);
-                byte twitchDropPct = CalculateLiveDropProgress(_currentTwitchCampaign, _twitchDropWatchedSeconds);
-                VerboseLog("LiveProgress", $"Twitch tick campaignId={_currentTwitchCampaign.Id}, campaignWatchedSeconds={_twitchWatchedSeconds}, dropWatchedSeconds={_twitchDropWatchedSeconds}, campaignPct={twitchCampPct}, dropPct={twitchDropPct}");
+                byte twitchCampPct = CalculateLiveCampaignProgress(currentTwitchCampaign, _twitchWatchedSeconds);
+                byte twitchDropPct = CalculateLiveDropProgress(currentTwitchCampaign, _twitchDropWatchedSeconds);
+                VerboseLog("LiveProgress", $"Twitch tick campaignId={currentTwitchCampaign.Id}, campaignWatchedSeconds={_twitchWatchedSeconds}, dropWatchedSeconds={_twitchDropWatchedSeconds}, campaignPct={twitchCampPct}, dropPct={twitchDropPct}");
                 TwitchProgressChanged?.Invoke(twitchCampPct, twitchDropPct);
             }
 
-            if (_currentKickCampaign != null)
+            DropsCampaign? currentKickCampaign = _currentKickCampaign;
+            if (currentKickCampaign != null)
             {
                 _kickWatchedSeconds++;
                 _kickDropWatchedSeconds++;
@@ -147,12 +149,12 @@ namespace Core.Managers
                 {
                     int minutesToApply = kickMinuteBucket - _kickAppliedMinuteBucket;
                     _kickAppliedMinuteBucket = kickMinuteBucket;
-                    ApplyMinuteProgressToActiveCampaign(Platform.Kick, _currentKickCampaign.Id, minutesToApply);
+                    ApplyMinuteProgressToActiveCampaign(Platform.Kick, currentKickCampaign.Id, minutesToApply);
                 }
 
-                byte kickCampPct = CalculateLiveCampaignProgress(_currentKickCampaign, _kickWatchedSeconds);
-                byte kickDropPct = CalculateLiveDropProgress(_currentKickCampaign, _kickDropWatchedSeconds);
-                VerboseLog("LiveProgress", $"Kick tick campaignId={_currentKickCampaign.Id}, campaignWatchedSeconds={_kickWatchedSeconds}, dropWatchedSeconds={_kickDropWatchedSeconds}, campaignPct={kickCampPct}, dropPct={kickDropPct}");
+                byte kickCampPct = CalculateLiveCampaignProgress(currentKickCampaign, _kickWatchedSeconds);
+                byte kickDropPct = CalculateLiveDropProgress(currentKickCampaign, _kickDropWatchedSeconds);
+                VerboseLog("LiveProgress", $"Kick tick campaignId={currentKickCampaign.Id}, campaignWatchedSeconds={_kickWatchedSeconds}, dropWatchedSeconds={_kickDropWatchedSeconds}, campaignPct={kickCampPct}, dropPct={kickDropPct}");
                 KickProgressChanged?.Invoke(kickCampPct, kickDropPct);
             }
         }
@@ -220,25 +222,44 @@ namespace Core.Managers
             await StartWatchingStreams();
         }
         /// <summary>
-        /// Calculates the overall progress percentage for unclaimed rewards in a campaign based on the total number of
-        /// seconds watched.
+        /// Calculates the overall progress percentage for a campaign using a hybrid approach:
+        /// - Full credit for the required time of all claimed rewards
+        /// - Plus progress from current watched time toward the remaining unclaimed rewards
+        /// - Divided by the total required time across ALL rewards in the campaign.
+        /// This gives a more "completionist" view of how much of the entire event is effectively done.
         /// </summary>
         /// <param name="campaign">The campaign containing the rewards for which progress is being calculated. Cannot be null.</param>
-        /// <param name="totalWatchedSeconds">The total number of seconds watched by the user toward earning unclaimed rewards. Must be greater than or
+        /// <param name="totalWatchedSeconds">The total number of seconds watched by the user toward earning drops. Must be greater than or
         /// equal to 0.</param>
-        /// <returns>A value between 0 and 100 representing the percentage of progress toward all unclaimed rewards. Returns 100
-        /// if all rewards are already claimed.</returns>
-        private static byte CalculateLiveCampaignProgress(DropsCampaign campaign, int totalWatchedSeconds)
+        /// <returns>A value between 0 and 100 representing the percentage of overall campaign completion.
+        /// Returns 100 if all rewards are already claimed or if total required time is zero.</returns>
+        private static byte CalculateLiveCampaignProgress(DropsCampaign? campaign, int totalWatchedSeconds)
         {
-            // Total required seconds across all unclaimed rewards
-            int totalRequiredSeconds = campaign.Rewards
-                .Where(r => !r.IsClaimed)
-                .Sum(r => r.RequiredMinutes * 60);
+            if (campaign == null)
+                return 0;
 
-            if (!campaign.Rewards.Where(r => !r.IsClaimed).Any())
-                return 0; // Campaign done
+            // Total required minutes across ALL rewards (claimed + unclaimed)
+            int totalRequiredMinutes = campaign.Rewards
+                .Sum(r => r.RequiredMinutes);
 
-            double percentage = (double)totalWatchedSeconds / totalRequiredSeconds * 100;
+            if (totalRequiredMinutes == 0)
+                return 100; // No requirements → done
+
+            // Sum required minutes only for claimed rewards (full credit for these)
+            int claimedRequiredMinutes = campaign.Rewards
+                .Where(r => r.IsClaimed)
+                .Sum(r => r.RequiredMinutes);
+
+            // Convert watched seconds to minutes for cleaner math
+            double watchedMinutes = totalWatchedSeconds / 60.0;
+
+            // Effective completed minutes = fully claimed parts + current progress on the rest
+            double effectiveCompletedMinutes = claimedRequiredMinutes + watchedMinutes;
+
+            // Prevent overflow if user has watched way more than needed
+            effectiveCompletedMinutes = Math.Min(effectiveCompletedMinutes, totalRequiredMinutes);
+
+            double percentage = (effectiveCompletedMinutes / totalRequiredMinutes) * 100;
             return (byte)Math.Clamp((int)Math.Floor(percentage), 0, 100);
         }
         /// <summary>
@@ -248,8 +269,11 @@ namespace Core.Managers
         /// <param name="totalWatchedSeconds">The total number of seconds the user has watched, used to determine progress toward the next reward.</param>
         /// <returns>A value between 0 and 100 representing the percentage of progress toward the next unclaimed reward. Returns
         /// 100 if all rewards have been claimed.</returns>
-        private static byte CalculateLiveDropProgress(DropsCampaign campaign, int totalWatchedSeconds)
+        private static byte CalculateLiveDropProgress(DropsCampaign? campaign, int totalWatchedSeconds)
         {
+            if (campaign == null)
+                return 0;
+
             // Find the next unclaimed reward
             List<DropsReward> unclaimedRewards = [.. campaign.Rewards.Where(r => !r.IsClaimed)];
             DropsReward? nextReward = unclaimedRewards
@@ -644,7 +668,15 @@ namespace Core.Managers
                 _startWatchingLock.Release();
             }
         }
-
+        /// <summary>
+        /// Marks the specified reward as claimed in the active campaign with the given campaign identifier.
+        /// </summary>
+        /// <remarks>If the specified campaign or reward is not found in the active campaigns, no changes
+        /// are made and the method returns false. The method updates the claimed status and progress of the reward, and
+        /// synchronizes related campaign selections.</remarks>
+        /// <param name="campaignId">The identifier of the campaign in which to mark the reward as claimed. Cannot be null or empty.</param>
+        /// <param name="rewardId">The identifier of the reward to mark as claimed. Cannot be null or empty.</param>
+        /// <returns>true if the reward was successfully marked as claimed; otherwise, false.</returns>
         private bool MarkRewardClaimedInActiveCampaigns(string campaignId, string rewardId)
         {
             bool updated = false;
@@ -1259,7 +1291,15 @@ namespace Core.Managers
             string hrefs = rawCategoryHrefs.Trim().Trim('"');
             return hrefs.Contains(expectedCategoryPath, StringComparison.OrdinalIgnoreCase);
         }
-
+        /// <summary>
+        /// Attempts to retrieve the last known streamer URL for the specified platform and campaign slug.
+        /// </summary>
+        /// <remarks>This method is thread-safe. The returned URL may be null if no streamer has been
+        /// recorded for the given campaign slug.</remarks>
+        /// <param name="platform">The platform for which to retrieve the last streamer URL. Must be a valid value of the Platform enumeration.</param>
+        /// <param name="campaignSlug">The campaign identifier used to look up the streamer URL. Cannot be null, empty, or whitespace.</param>
+        /// <param name="url">When this method returns, contains the last known streamer URL if found; otherwise, null.</param>
+        /// <returns>true if a valid streamer URL was found for the specified platform and campaign slug; otherwise, false.</returns>
         private bool TryGetLastStreamerUrl(Platform platform, string? campaignSlug, out string? url)
         {
             url = null;
@@ -1276,7 +1316,16 @@ namespace Core.Managers
                 return true;
             }
         }
-
+        /// <summary>
+        /// Stores the last watched streamer URL for the specified platform and campaign if the provided values are
+        /// valid.
+        /// </summary>
+        /// <remarks>If the campaign slug or streamer URL is invalid, the method does not update the
+        /// stored value. Updates are persisted only if the value changes.</remarks>
+        /// <param name="platform">The platform for which to record the last watched streamer URL. Determines whether Twitch or Kick is
+        /// updated.</param>
+        /// <param name="campaignSlug">The unique identifier for the campaign. Cannot be null, empty, or whitespace.</param>
+        /// <param name="streamerUrl">The URL of the streamer to remember. Cannot be null, empty, or whitespace.</param>
         private void RememberLastStreamerUrl(Platform platform, string? campaignSlug, string? streamerUrl)
         {
             if (string.IsNullOrWhiteSpace(campaignSlug) || string.IsNullOrWhiteSpace(streamerUrl))
@@ -1297,7 +1346,12 @@ namespace Core.Managers
             if (changed)
                 SaveLastWatchedStreamers();
         }
-
+        /// <summary>
+        /// Loads the last watched streamers from persistent storage and updates the internal state.
+        /// </summary>
+        /// <remarks>This method reads streamer information from a file and updates the Twitch and Kick
+        /// streamer lists. If the file does not exist or contains invalid data, the lists are not modified. The
+        /// operation is thread-safe and logs informational or warning messages based on the outcome.</remarks>
         private void LoadLastWatchedStreamers()
         {
             try
@@ -1335,7 +1389,13 @@ namespace Core.Managers
                 AppLogger.Warn("StreamSelection", $"Failed loading remembered streamers. {ex.Message}");
             }
         }
-
+        /// <summary>
+        /// Persists the current state of last watched streamers to disk in JSON format.
+        /// </summary>
+        /// <remarks>This method serializes the last watched Twitch and Kick streamers and writes them to
+        /// the configured file path. If the target directory does not exist, it is created. Any errors during the save
+        /// operation are logged as warnings. The method is thread-safe and should be called when the state needs to be
+        /// updated on disk.</remarks>
         private void SaveLastWatchedStreamers()
         {
             try
@@ -1364,6 +1424,11 @@ namespace Core.Managers
             }
         }
 
+        /// <summary>
+        /// Represents the state containing mappings of streamer slugs to their Twitch and Kick usernames.
+        /// </summary>
+        /// <remarks>This class is used to track the last watched streamers for each platform. The
+        /// dictionaries are case-insensitive with respect to streamer slugs.</remarks>
         private sealed class LastWatchedStreamersState
         {
             public Dictionary<string, string> TwitchBySlug { get; set; } = new(StringComparer.OrdinalIgnoreCase);
