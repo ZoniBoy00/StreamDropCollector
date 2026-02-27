@@ -37,10 +37,12 @@ namespace Core.Managers
         private int _kickDropWatchedSeconds;
 
         // Timer for live ticking
-        private readonly System.Timers.Timer _liveMinuteTickTimer = new(60000);
         private readonly System.Timers.Timer _liveProgressTimer = new(1000);
         private System.Timers.Timer? _recheckTimer;
         private System.Timers.Timer? _streamHealthTimer;
+
+        private int _twitchAppliedMinuteBucket;
+        private int _kickAppliedMinuteBucket;
 
         private readonly SemaphoreSlim _startWatchingLock = new(1, 1);
         private CancellationTokenSource? _startWatchingCts;
@@ -68,65 +70,40 @@ namespace Core.Managers
 
             _liveProgressTimer.Elapsed += OnLiveProgressTick;
             _liveProgressTimer.AutoReset = true;
-
-            // Minute-by-minute progress for Inventory UI
-            _liveMinuteTickTimer.Elapsed += OnLiveMinuteTick;
-            _liveMinuteTickTimer.AutoReset = true;
-            _liveMinuteTickTimer.Start(); // Always on – safe
         }
 
-        /// <summary>
-        /// Handles the timer event that occurs every minute to update the progress of active drops campaigns.
-        /// </summary>
-        /// <remarks>This method should be connected to a timer that fires once per minute. It updates the
-        /// progress of rewards in active campaigns, incrementing progress for eligible rewards. The updates are
-        /// performed on the application's main UI thread to ensure thread safety when modifying UI-bound
-        /// collections.</remarks>
-        /// <param name="sender">The source of the event, typically the timer that triggered the tick.</param>
-        /// <param name="e">An ElapsedEventArgs object that contains the event data.</param>
-        private void OnLiveMinuteTick(object? sender, ElapsedEventArgs e)
+        private void ApplyMinuteProgressToActiveCampaign(Platform platform, string campaignId, int minutesToAdd)
         {
+            if (minutesToAdd <= 0)
+                return;
+
             Application.Current.Dispatcher.Invoke(() =>
             {
-                bool updated = false;
+                DropsCampaign? campaign = ActiveCampaigns.FirstOrDefault(c => c.Platform == platform && c.Id == campaignId);
+                if (campaign == null || !campaign.HasProgressToMake())
+                    return;
 
-                List<DropsCampaign> newCampaigns = new List<DropsCampaign>();
+                int campaignIndex = ActiveCampaigns.IndexOf(campaign);
+                if (campaignIndex < 0)
+                    return;
 
-                foreach (DropsCampaign campaign in ActiveCampaigns)
+                List<DropsReward> updatedRewards = new List<DropsReward>(campaign.Rewards.Count);
+                foreach (DropsReward reward in campaign.Rewards)
                 {
-                    bool isActive = (campaign.Platform == Platform.Twitch && campaign.Id == _currentTwitchCampaign?.Id) || (campaign.Platform == Platform.Kick && campaign.Id == _currentKickCampaign?.Id);
-
-                    if (isActive && campaign.HasProgressToMake())
-                    {
-                        // Create updated rewards with +1 minute on unclaimed
-                        List<DropsReward> updatedRewards = new List<DropsReward>();
-
-                        foreach (DropsReward reward in campaign.Rewards)
-                        {
-                            int newProgress = reward.ProgressMinutes + 1;
-                            updatedRewards.Add(reward with { ProgressMinutes = newProgress });
-                        }
-
-                        VerboseLog("MinuteTick", $"campaignId={campaign.Id}, platform={campaign.Platform}, rewardsUpdated={campaign.Rewards.Count}, unclaimedRewards={campaign.Rewards.Count(r => !r.IsClaimed)}");
-
-                        DropsCampaign updatedCampaign = campaign with { Rewards = updatedRewards };
-                        newCampaigns.Add(updatedCampaign);
-                        updated = true;
-                    }
-                    else
-                    {
-                        newCampaigns.Add(campaign);
-                    }
+                    int newProgress = reward.ProgressMinutes + minutesToAdd;
+                    updatedRewards.Add(reward with { ProgressMinutes = newProgress });
                 }
 
-                if (updated)
-                {
-                    ActiveCampaigns.Clear();
-                    foreach (DropsCampaign? c in newCampaigns.OrderBy(x => x.GameName))
-                    {
-                        ActiveCampaigns.Add(c);
-                    }
-                }
+                VerboseLog("MinuteTick", $"campaignId={campaign.Id}, platform={campaign.Platform}, minutesAdded={minutesToAdd}, rewardsUpdated={campaign.Rewards.Count}, unclaimedRewards={campaign.Rewards.Count(r => !r.IsClaimed)}");
+
+                DropsCampaign updatedCampaign = campaign with { Rewards = updatedRewards };
+                ActiveCampaigns[campaignIndex] = updatedCampaign;
+
+                if (platform == Platform.Twitch && _currentTwitchCampaign?.Id == campaignId)
+                    _currentTwitchCampaign = updatedCampaign;
+
+                if (platform == Platform.Kick && _currentKickCampaign?.Id == campaignId)
+                    _currentKickCampaign = updatedCampaign;
 
                 UpdateCurrentSelectionFlags();
             });
@@ -145,6 +122,15 @@ namespace Core.Managers
             {
                 _twitchWatchedSeconds++;
                 _twitchDropWatchedSeconds++;
+
+                int twitchMinuteBucket = _twitchWatchedSeconds / 60;
+                if (twitchMinuteBucket > _twitchAppliedMinuteBucket)
+                {
+                    int minutesToApply = twitchMinuteBucket - _twitchAppliedMinuteBucket;
+                    _twitchAppliedMinuteBucket = twitchMinuteBucket;
+                    ApplyMinuteProgressToActiveCampaign(Platform.Twitch, _currentTwitchCampaign.Id, minutesToApply);
+                }
+
                 byte twitchCampPct = CalculateLiveCampaignProgress(_currentTwitchCampaign, _twitchWatchedSeconds);
                 byte twitchDropPct = CalculateLiveDropProgress(_currentTwitchCampaign, _twitchDropWatchedSeconds);
                 VerboseLog("LiveProgress", $"Twitch tick campaignId={_currentTwitchCampaign.Id}, campaignWatchedSeconds={_twitchWatchedSeconds}, dropWatchedSeconds={_twitchDropWatchedSeconds}, campaignPct={twitchCampPct}, dropPct={twitchDropPct}");
@@ -155,6 +141,15 @@ namespace Core.Managers
             {
                 _kickWatchedSeconds++;
                 _kickDropWatchedSeconds++;
+
+                int kickMinuteBucket = _kickWatchedSeconds / 60;
+                if (kickMinuteBucket > _kickAppliedMinuteBucket)
+                {
+                    int minutesToApply = kickMinuteBucket - _kickAppliedMinuteBucket;
+                    _kickAppliedMinuteBucket = kickMinuteBucket;
+                    ApplyMinuteProgressToActiveCampaign(Platform.Kick, _currentKickCampaign.Id, minutesToApply);
+                }
+
                 byte kickCampPct = CalculateLiveCampaignProgress(_currentKickCampaign, _kickWatchedSeconds);
                 byte kickDropPct = CalculateLiveDropProgress(_currentKickCampaign, _kickDropWatchedSeconds);
                 VerboseLog("LiveProgress", $"Kick tick campaignId={_currentKickCampaign.Id}, campaignWatchedSeconds={_kickWatchedSeconds}, dropWatchedSeconds={_kickDropWatchedSeconds}, campaignPct={kickCampPct}, dropPct={kickDropPct}");
@@ -307,6 +302,9 @@ namespace Core.Managers
 
                 KickChannelChanged?.Invoke(string.Empty);
                 KickProgressChanged?.Invoke(0, 0);
+
+                _twitchAppliedMinuteBucket = 0;
+                _kickAppliedMinuteBucket = 0;
 
                 AppLogger.Debug("Miner", "[DropsInventoryManager] Starting stream watching process...");
                 AppLogger.Info("Miner", $"StartWatchingStreams invoked. restartedInternally={restartedInternally}, activeCampaigns={ActiveCampaigns.Count}, paused={_isPaused}");
@@ -478,6 +476,7 @@ namespace Core.Managers
                             .FirstOrDefault();
 
                         _twitchDropWatchedSeconds = nextTwitchReward?.ProgressMinutes * 60 ?? 0;
+                        _twitchAppliedMinuteBucket = _twitchWatchedSeconds / 60;
 
                         VerboseLog("SelectionBaseline", $"Twitch campaignId={bestTwitch.Id}, campaignWatchedSecondsBaseline={_twitchWatchedSeconds}, dropWatchedSecondsBaseline={_twitchDropWatchedSeconds}, nextRewardId={nextTwitchReward?.Id ?? "none"}, unclaimedRewards={bestTwitch.Rewards.Count(r => !r.IsClaimed)}");
 
@@ -578,6 +577,7 @@ namespace Core.Managers
                             .FirstOrDefault();
 
                         _kickDropWatchedSeconds = nextKickReward?.ProgressMinutes * 60 ?? 0;
+                        _kickAppliedMinuteBucket = _kickWatchedSeconds / 60;
 
                         VerboseLog("SelectionBaseline", $"Kick campaignId={bestKick.Id}, campaignWatchedSecondsBaseline={_kickWatchedSeconds}, dropWatchedSecondsBaseline={_kickDropWatchedSeconds}, nextRewardId={nextKickReward?.Id ?? "none"}, unclaimedRewards={bestKick.Rewards.Count(r => !r.IsClaimed)}");
 
