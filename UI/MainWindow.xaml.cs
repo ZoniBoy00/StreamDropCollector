@@ -124,17 +124,21 @@ namespace UI
                     case "--updating":
                         Thread.Sleep(3000); // Allow other instance(s) to close before finalizing the update
 
-                        // Delete all files and folders from the base path (%appdata% + \\Stream Drop Collector) except the "Update" folder, and some other files and folders
+                        // Delete all files and folders from the base path (%appdata% + \\Stream Drop Collector)
+                        // except update/runtime state and user data.
                         string[] foldersToKeep =
                         [
                             "Update",
-                            "Stream Drop Collector.exe.WebView2"
+                            "Stream Drop Collector.exe.WebView2",
+                            "logs"
                         ];
 
                         string[] filesToKeep =
                         [
                             "Settings.json",
-                            "sha_cache.tsgs"
+                            "sha_cache.tsgs",
+                            "GqlHashCache.json",
+                            "LastWatchedStreamers.json"
                         ];
 
                         // Delete all files, except for the ones in filesToKeep
