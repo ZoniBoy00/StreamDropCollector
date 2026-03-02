@@ -180,11 +180,18 @@ namespace Core.Managers
         public void UpdateCampaigns(IEnumerable<DropsCampaign> campaigns, IGqlService? twitchGqlService, bool startWatching = true)
         {
             _twitchGqlService = twitchGqlService;
+            List<DropsCampaign> allCampaigns = campaigns.ToList();
 
             Application.Current.Dispatcher.Invoke(() =>
             {
+                UISettingsManager.Instance.UpdateAvailableGameFilterOptions(allCampaigns);
+
+                List<DropsCampaign> filteredCampaigns = allCampaigns
+                    .Where(c => UISettingsManager.Instance.IsCampaignAllowedByWhitelist(c))
+                    .ToList();
+
                 ActiveCampaigns.Clear();
-                foreach (DropsCampaign? c in campaigns.Where(c => c.StartsAt <= DateTimeOffset.Now && c.EndsAt > DateTimeOffset.Now).OrderBy(x => x.GameName))
+                foreach (DropsCampaign? c in filteredCampaigns.Where(c => c.StartsAt <= DateTimeOffset.Now && c.EndsAt > DateTimeOffset.Now).OrderBy(x => x.GameName))
                 {
                     ActiveCampaigns.Add(c);
                 }
