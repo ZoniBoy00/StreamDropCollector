@@ -561,7 +561,7 @@ namespace Core.Managers
 
                         DropsReward? soonestTwitch = bestTwitch.Rewards
                             .Where(r => !r.IsClaimed && r.ProgressMinutes < r.RequiredMinutes)
-                            .OrderBy(r => (r.RequiredMinutes - r.ProgressMinutes))
+                            .OrderBy(r => r.RequiredMinutes - r.ProgressMinutes)
                             .FirstOrDefault();
 
                         if (soonestTwitch != null)
