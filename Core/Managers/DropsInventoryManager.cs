@@ -1,11 +1,11 @@
 ﻿using System.Collections.ObjectModel;
+using System.Text.Json;
 using Core.Interfaces;
 using System.Windows;
 using System.Timers;
 using Core.Logging;
 using Core.Models;
 using Core.Enums;
-using System.Text.Json;
 using System.IO;
 
 namespace Core.Managers
@@ -35,6 +35,9 @@ namespace Core.Managers
         private int _kickWatchedSeconds;
         private int _twitchDropWatchedSeconds;
         private int _kickDropWatchedSeconds;
+
+        private bool _lastKnownKickOnlineState;
+        private bool _lastKnownTwitchOnlineState;
 
         // Timer for live ticking
         private readonly System.Timers.Timer _liveProgressTimer = new(1000);
@@ -218,7 +221,7 @@ namespace Core.Managers
                 List<DropsCampaign> filteredCampaigns = sourceCampaigns
                     .Where(c => UISettingsManager.Instance.IsCampaignAllowedByWhitelist(c))
                     .Where(c => c.StartsAt <= DateTimeOffset.Now && c.EndsAt > DateTimeOffset.Now)
-                    .OrderBy(x => x.GameName)
+                    .OrderBy(x => x.Platform).ThenBy(x => x.GameName)
                     .ToList();
 
                 ActiveCampaigns.Clear();
@@ -363,7 +366,7 @@ namespace Core.Managers
                     .ToList();
 
                 ActiveCampaigns.Clear();
-                foreach (DropsCampaign? c in filteredCampaigns.Where(c => c.StartsAt <= DateTimeOffset.Now && c.EndsAt > DateTimeOffset.Now).OrderBy(x => x.GameName))
+                foreach (DropsCampaign? c in filteredCampaigns.Where(c => c.StartsAt <= DateTimeOffset.Now && c.EndsAt > DateTimeOffset.Now).OrderBy(x => x.Platform).ThenBy(x => x.GameName))
                 {
                     ActiveCampaigns.Add(c);
                 }
@@ -492,6 +495,13 @@ namespace Core.Managers
             await _startWatchingLock.WaitAsync();
             try
             {
+                VerboseLog("StartWatching",
+                    $"ENTERING StartWatchingStreams | restarted={restartedInternally} | " +
+                    $"paused={_isPaused} | activeCampaigns={ActiveCampaigns.Count} | " +
+                    $"twitchCurrent={_currentTwitchCampaign?.Id ?? "null"} | " +
+                    $"kickCurrent={_currentKickCampaign?.Id ?? "null"} | " +
+                    $"twitchSeconds={_twitchWatchedSeconds} | twitchApplied={_twitchAppliedMinuteBucket}");
+
                 if (_isPaused)
                     return;
 
@@ -508,6 +518,8 @@ namespace Core.Managers
 
                 _twitchAppliedMinuteBucket = 0;
                 _kickAppliedMinuteBucket = 0;
+
+                VerboseLog("StartWatching", $"AFTER reset | twitchApplied={_twitchAppliedMinuteBucket} | kickApplied={_kickAppliedMinuteBucket}");
 
                 AppLogger.Debug("Miner", "[DropsInventoryManager] Starting stream watching process...");
                 AppLogger.Info("Miner", $"StartWatchingStreams invoked. restartedInternally={restartedInternally}, activeCampaigns={ActiveCampaigns.Count}, paused={_isPaused}");
@@ -651,6 +663,12 @@ namespace Core.Managers
 
                         await Task.Delay(5000);
 
+                        VerboseLog("SelectionBaseline",
+                            $"ABOUT to set Twitch baseline | " +
+                            $"newCampaign={bestTwitch.Id} | " +
+                            $"currentSeconds={_twitchWatchedSeconds} | " +
+                            $"currentApplied={_twitchAppliedMinuteBucket}");
+
                         _currentTwitchCampaign = bestTwitch;
 
                         bool twitchOnline = await IsTwitchStreamOnline();
@@ -664,6 +682,8 @@ namespace Core.Managers
                             remainingTwitchCampaigns.Remove(bestTwitch);
                             continue;
                         }
+
+                        _lastKnownTwitchOnlineState = true;
 
                         UpdateCurrentSelectionFlags();
 
@@ -680,6 +700,13 @@ namespace Core.Managers
 
                         _twitchDropWatchedSeconds = nextTwitchReward?.ProgressMinutes * 60 ?? 0;
                         _twitchAppliedMinuteBucket = _twitchWatchedSeconds / 60;
+
+                        VerboseLog("SelectionBaseline",
+                            $"Twitch baseline SET | " +
+                            $"campaignId={bestTwitch.Id} | " +
+                            $"watchedSeconds={_twitchWatchedSeconds} | " +
+                            $"dropWatchedSeconds={_twitchDropWatchedSeconds} | " +
+                            $"appliedBucket={_twitchAppliedMinuteBucket}");
 
                         VerboseLog("SelectionBaseline", $"Twitch campaignId={bestTwitch.Id}, campaignWatchedSecondsBaseline={_twitchWatchedSeconds}, dropWatchedSecondsBaseline={_twitchDropWatchedSeconds}, nextRewardId={nextTwitchReward?.Id ?? "none"}, unclaimedRewards={bestTwitch.Rewards.Count(r => !r.IsClaimed)}");
 
@@ -768,6 +795,8 @@ namespace Core.Managers
                             remainingKickCampaigns.Remove(bestKick);
                             continue;
                         }
+
+                        _lastKnownKickOnlineState = true;
 
                         UpdateCurrentSelectionFlags();
                         _kickWatchedSeconds = bestKick.Rewards
@@ -952,7 +981,7 @@ namespace Core.Managers
                 }
 
                 ActiveCampaigns.Clear();
-                foreach (DropsCampaign? c in updatedCampaigns.OrderBy(x => x.GameName))
+                foreach (DropsCampaign? c in updatedCampaigns.OrderBy(x => x.Platform).ThenBy(x => x.GameName))
                 {
                     ActiveCampaigns.Add(c);
                 }
@@ -988,8 +1017,8 @@ namespace Core.Managers
                     List<DropsCampaign> twitchCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Twitch && c.HasProgressToMake())];
                     List<DropsCampaign> kickCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Kick && c.HasProgressToMake())];
 
-                    bool twitchNeedsReevaluation = twitchCampaigns.Count != 0 && (!twitchOnline || !twitchCorrectCategory || twitchShowingAd);
-                    bool kickNeedsReevaluation = kickCampaigns.Count != 0 && (!kickOnline || !kickCorrectCategory);
+                    bool twitchNeedsReevaluation = twitchCampaigns.Count != 0 && (!twitchOnline || !twitchCorrectCategory || twitchShowingAd) && _lastKnownTwitchOnlineState;
+                    bool kickNeedsReevaluation = kickCampaigns.Count != 0 && (!kickOnline || !kickCorrectCategory) && _lastKnownKickOnlineState;
 
                     if (twitchNeedsReevaluation || kickNeedsReevaluation)
                     {
@@ -998,6 +1027,12 @@ namespace Core.Managers
                             ForgetLastStreamerUrl(Platform.Twitch, _currentTwitchCampaign!.Slug);
                             AppLogger.Warn("HealthCheck", $"Twitch ad detected for campaign '{_currentTwitchCampaign.Name}'. Forgetting remembered streamer to force a switch.");
                         }
+
+                        if (!twitchOnline)
+                            _lastKnownTwitchOnlineState = false;
+
+                        if (!kickOnline)
+                            _lastKnownKickOnlineState = false;
 
                         AppLogger.Debug("HealthCheck", "[Health Check] Stream unhealthy -> forcing re-evaluation");
                         AppLogger.Warn("HealthCheck", $"Forcing re-evaluation. twitchOnline={twitchOnline}, twitchCategoryOk={twitchCorrectCategory}, twitchAd={twitchShowingAd}, kickOnline={kickOnline}, kickCategoryOk={kickCorrectCategory}");
@@ -1240,16 +1275,12 @@ namespace Core.Managers
             string js = @"
                 (() => {
                     const categoryElement = document.querySelector("".text-primary-base"");
-                    const category = categoryElement ? categoryElement.innerText.trim() : '';
-                    return category;
+                    return categoryElement ? categoryElement.href.trim() : '';
                 })();
                 ";
 
             string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView.ExecuteScriptAsync(js));
-            bool isCorrect = rawResult?
-                .Trim()
-                .Trim('"')
-                .Contains(_currentKickCampaign?.Slug ?? "", StringComparison.OrdinalIgnoreCase) ?? false;
+            bool isCorrect = KickCategoryHrefMatchesCampaign(rawResult, _currentKickCampaign?.Slug);
 
             AppLogger.Debug("KickSelection", $"[DropsInventoryManager] Kick stream category correct status: {isCorrect}");
             return isCorrect;
@@ -1364,21 +1395,16 @@ namespace Core.Managers
         private async Task<string> SelectKickStreamerForCampaign(DropsCampaign campaign)
         {
             string streamerUrl = string.Empty;
-
-            if (TryGetLastStreamerUrl(Platform.Kick, campaign.Slug, out string? rememberedKickUrl))
-            {
-                AppLogger.Info("KickSelection", $"Trying remembered Kick streamer for campaign '{campaign.Name}': {rememberedKickUrl}");
-                return rememberedKickUrl!;
-            }
+            TryGetLastStreamerUrl(Platform.Kick, campaign.Slug, out string? rememberedKickUrl);
 
             string getStreamerCategoryJs = @"
                 (() => {
                     const categoryElement = document.querySelector("".text-primary-base"");
-                    return categoryElement ? categoryElement.innerText.trim() : '';
+                    return categoryElement ? categoryElement.href.trim() : '';
                 })();
             ";
 
-            string js = $@"
+            string getFirstStreamerFromDirectoryJs = $@"
                 (() => {{
                     const titles = document.querySelectorAll('h3.text-base.font-bold.leading-5');
                     if (titles.length === 0) return '';
@@ -1396,19 +1422,36 @@ namespace Core.Managers
                     const link = firstCard.querySelector('a');
                     return link ? link.href.trim() : '';
                 }})();
-            ";
+            "; 
+
             if (!campaign.IsGeneralDrop)
             {
-                foreach (string connectUrl in campaign.ConnectUrls)
+                // NON-GENERAL DROPS
+                IEnumerable<string> orderedConnectUrls = campaign.ConnectUrls;
+                if (!string.IsNullOrWhiteSpace(rememberedKickUrl))
+                {
+                    orderedConnectUrls = new[] { rememberedKickUrl! }
+                        .Concat(campaign.ConnectUrls)
+                        .Distinct(StringComparer.OrdinalIgnoreCase);
+                }
+
+                foreach (string connectUrl in orderedConnectUrls)
                 {
                     await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(connectUrl));
                     await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.WaitForNetworkIdleAsync(5000, 500));
 
                     string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
 
-                    if (categoryResult.Contains(campaign.Slug, StringComparison.OrdinalIgnoreCase))
+                    if (KickCategoryHrefMatchesCampaign(categoryResult, campaign.Slug))
                     {
                         streamerUrl = connectUrl;
+
+                        if (!string.IsNullOrWhiteSpace(rememberedKickUrl) &&
+                            string.Equals(connectUrl, rememberedKickUrl, StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppLogger.Info("KickSelection", $"Remembered Kick streamer accepted for campaign '{campaign.Name}': {connectUrl}");
+                        }
+
                         break;
                     }
 
@@ -1417,15 +1460,69 @@ namespace Core.Managers
             }
             else
             {
-                await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.NavigateAsync(campaign.ConnectUrls[0]));
-                await Task.Delay(1500);
+                // Step 1: Try remembered URL if available (validate category!)
+                if (!string.IsNullOrWhiteSpace(rememberedKickUrl))
+                {
+                    AppLogger.Info("KickSelection", $"Trying remembered Kick streamer for general campaign '{campaign.Name}': {rememberedKickUrl}");
 
-                string rawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ExecuteScriptAsync(js));
-                streamerUrl = rawResult?.Trim().Trim('"') ?? "";
+                    await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await KickWebView!.NavigateAsync(rememberedKickUrl));
+
+                    await Task.Delay(1500);  // Consider → WaitForNetworkIdleAsync(5000, 500) for better sync
+
+                    string categoryResult = await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await KickWebView!.ExecuteScriptAsync(getStreamerCategoryJs));
+
+                    if (KickCategoryHrefMatchesCampaign(categoryResult, campaign.Slug))
+                    {
+                        AppLogger.Info("KickSelection", $"Remembered streamer still matches category for general campaign '{campaign.Name}': {rememberedKickUrl}");
+                        streamerUrl = rememberedKickUrl!;
+                    }
+                    else
+                    {
+                        AppLogger.Warn("KickSelection", $"Remembered URL no longer matches category for general '{campaign.Name}': {rememberedKickUrl} | found: '{categoryResult}'");
+                        // fall through to directory fallback
+                    }
+                }
+
+                // Step 2: If no valid remembered → navigate category directory → extract first streamer via your JS
+                if (string.IsNullOrWhiteSpace(streamerUrl) && campaign.ConnectUrls?.Any() == true)
+                {
+                    string directoryUrl = campaign.ConnectUrls[0];  // category page with live list
+
+                    AppLogger.Info("KickSelection", $"Falling back to category directory for general campaign '{campaign.Name}': {directoryUrl}");
+
+                    await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await KickWebView!.NavigateAsync(directoryUrl));
+
+                    await Task.Delay(1500);  // Again — consider WaitForNetworkIdleAsync if needed
+
+                    string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await KickWebView!.ExecuteScriptAsync(getFirstStreamerFromDirectoryJs));
+
+                    streamerUrl = firstStreamerRawResult?.Trim().Trim('"') ?? string.Empty;
+
+                    if (!string.IsNullOrWhiteSpace(streamerUrl))
+                    {
+                        AppLogger.Info("KickSelection", $"Selected first live streamer from directory for '{campaign.Name}': {streamerUrl}");
+                    }
+                    else
+                    {
+                        AppLogger.Warn("KickSelection", $"Failed to extract any first streamer from directory '{directoryUrl}' for general campaign '{campaign.Name}'");
+                    }
+                }
+
+                // Final logging and event
+                if (!string.IsNullOrWhiteSpace(streamerUrl))
+                {
+                    KickChannelChanged?.Invoke(GetStreamerNameFromUrl(streamerUrl));
+                    AppLogger.Debug("KickSelection", $"[DropsInventoryManager] Selected Kick streamer URL for general campaign '{campaign.Name}': {streamerUrl}");
+                }
+                else
+                {
+                    AppLogger.Warn("KickSelection", $"No valid Kick streamer URL resolved for general campaign '{campaign.Name}'.");
+                }
             }
-
-            AppLogger.Debug("KickSelection", $"[DropsInventoryManager] Selected Kick streamer URL for campaign '{campaign.Name}': {streamerUrl}");
-            KickChannelChanged?.Invoke(GetStreamerNameFromUrl(streamerUrl));
 
             return streamerUrl;
         }
@@ -1498,30 +1595,69 @@ namespace Core.Managers
             }
             else
             {
+                // Step 1: Try remembered URL if available (validate it!)
                 if (!string.IsNullOrWhiteSpace(rememberedTwitchUrl))
                 {
                     AppLogger.Info("TwitchSelection", $"Trying remembered Twitch streamer for general campaign '{campaign.Name}': {rememberedTwitchUrl}");
-                    streamerUrl = rememberedTwitchUrl!;
+
+                    await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await TwitchWebView!.NavigateAsync(rememberedTwitchUrl));
+
+                    await Task.Delay(1500);  // Consider replacing with WaitForNetworkIdleAsync(5000, 500) for consistency
+
+                    string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+
+                    if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                    {
+                        AppLogger.Info("TwitchSelection", $"Remembered streamer still matches category for general campaign '{campaign.Name}': {rememberedTwitchUrl}");
+                        streamerUrl = rememberedTwitchUrl!;
+                    }
+                    else
+                    {
+                        AppLogger.Warn("TwitchSelection", $"Remembered URL no longer matches category for general '{campaign.Name}': {rememberedTwitchUrl} | found: '{categoryHrefResult}'");
+                        // → fall through to directory fallback
+                    }
                 }
 
+                // Step 2: If no valid remembered → use category directory + pick first live streamer
+                if (string.IsNullOrWhiteSpace(streamerUrl) && campaign.ConnectUrls?.Any() == true)
+                {
+                    string directoryUrl = campaign.ConnectUrls[0];  // category/game directory page
+
+                    AppLogger.Info("TwitchSelection", $"Falling back to category directory for general campaign '{campaign.Name}': {directoryUrl}");
+
+                    await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await TwitchWebView!.NavigateAsync(directoryUrl));
+
+                    await Task.Delay(1500);  // Again — consider WaitForNetworkIdleAsync if timing issues occur
+
+                    string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        await TwitchWebView!.ExecuteScriptAsync(getFirstStreamerJs));
+
+                    streamerUrl = firstStreamerRawResult?.Trim().Trim('"') ?? string.Empty;
+
+                    if (!string.IsNullOrWhiteSpace(streamerUrl))
+                    {
+                        AppLogger.Info("TwitchSelection", $"Selected first live streamer from directory for '{campaign.Name}': {streamerUrl}");
+                    }
+                    else
+                    {
+                        AppLogger.Warn("TwitchSelection", $"Failed to extract any first streamer from directory '{directoryUrl}' for general campaign '{campaign.Name}'");
+                    }
+                }
+
+                // Final logging and event
                 if (!string.IsNullOrWhiteSpace(streamerUrl))
                 {
-                    AppLogger.Debug("TwitchSelection", $"[DropsInventoryManager] Selected Twitch streamer URL for campaign '{campaign.Name}': {streamerUrl}");
                     TwitchChannelChanged?.Invoke(GetStreamerNameFromUrl(streamerUrl));
-                    return streamerUrl;
+                    AppLogger.Debug("TwitchSelection", $"[DropsInventoryManager] Selected Twitch streamer URL for general campaign '{campaign.Name}': {streamerUrl}");
                 }
-
-                await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(campaign.ConnectUrls[0]));
-                await Task.Delay(1500);
-
-                string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getFirstStreamerJs));
-                streamerUrl = firstStreamerRawResult?.Trim().Trim('"') ?? "";
+                else
+                {
+                    AppLogger.Warn("TwitchSelection", $"No valid Twitch streamer URL resolved for general campaign '{campaign.Name}'.");
+                }
             }
-
-            AppLogger.Debug("TwitchSelection", $"[DropsInventoryManager] Selected Twitch streamer URL for campaign '{campaign.Name}': {streamerUrl}");
-            if (string.IsNullOrWhiteSpace(streamerUrl))
-                AppLogger.Warn("TwitchSelection", $"No Twitch streamer URL could be resolved for campaign '{campaign.Name}'.");
-            TwitchChannelChanged?.Invoke(GetStreamerNameFromUrl(streamerUrl));
 
             return streamerUrl;
         }
@@ -1543,6 +1679,16 @@ namespace Core.Managers
             string hrefs = rawCategoryHrefs.Trim().Trim('"');
             return hrefs.Contains(expectedCategoryPath, StringComparison.OrdinalIgnoreCase);
         }
+        private static bool KickCategoryHrefMatchesCampaign(string? rawCategoryHrefs, string? campaignSlug)
+        {
+            if (string.IsNullOrWhiteSpace(rawCategoryHrefs) || string.IsNullOrWhiteSpace(campaignSlug))
+                return false;
+
+            string expectedCategoryPath = $"/category/{campaignSlug}";
+            string hrefs = rawCategoryHrefs.Trim().Trim('"');
+            return hrefs.Contains(expectedCategoryPath, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// Attempts to retrieve the last known streamer URL for the specified platform and campaign slug.
         /// </summary>
