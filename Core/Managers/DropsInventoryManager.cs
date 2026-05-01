@@ -1580,27 +1580,73 @@ namespace Core.Managers
                         .Distinct(StringComparer.OrdinalIgnoreCase);
                 }
 
-                foreach (string connectUrl in orderedConnectUrls)
+                // If there are many ConnectUrls, batch-check live status via GQL
+                // instead of navigating the WebView one by one
+                const int webViewThreshold = 10;
+                if (campaign.ConnectUrls.Count > webViewThreshold)
                 {
-                    await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(connectUrl));
-                    await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
+                    AppLogger.Info("TwitchSelection", $"Campaign '{campaign.Name}' has {campaign.ConnectUrls.Count} ConnectUrls - using batch GQL live check.");
 
-                    string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+                    List<string> loginNames = orderedConnectUrls
+                        .Select(GetStreamerNameFromUrl)
+                        .Where(l => !string.IsNullOrWhiteSpace(l))
+                        .ToList();
 
-                    if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                    List<string> liveLogins = await _twitchGqlService!.QueryLiveChannelsBySlugAsync(loginNames, campaign.Slug);
+
+                    if (liveLogins.Count == 0)
                     {
-                        streamerUrl = connectUrl;
+                        AppLogger.Warn("TwitchSelection", $"No live streamers found for campaign '{campaign.Name}' via batch GQL.");
+                    }
+                    else
+                    {
+                        AppLogger.Info("TwitchSelection", $"Batch GQL found {liveLogins.Count} live streamers for '{campaign.Name}'. Trying in order.");
 
-                        if (!string.IsNullOrWhiteSpace(rememberedTwitchUrl) &&
-                            string.Equals(connectUrl, rememberedTwitchUrl, StringComparison.OrdinalIgnoreCase))
+                        foreach (string login in liveLogins)
                         {
-                            AppLogger.Info("TwitchSelection", $"Remembered Twitch streamer accepted for campaign '{campaign.Name}': {connectUrl}");
+                            string url = $"https://www.twitch.tv/{login}";
+
+                            await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(url));
+                            await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
+
+                            string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+
+                            if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                            {
+                                streamerUrl = url;
+                                AppLogger.Info("TwitchSelection", $"Batch GQL streamer accepted for campaign '{campaign.Name}': {url}");
+                                break;
+                            }
+
+                            AppLogger.Warn("TwitchSelection", $"Batch GQL streamer category mismatch for '{campaign.Name}': {url}");
+                        }
+                    }
+                }
+                else
+                {
+                    // Original sequential WebView path for small ConnectUrl lists
+                    foreach (string connectUrl in orderedConnectUrls)
+                    {
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(connectUrl));
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
+
+                        string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+
+                        if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                        {
+                            streamerUrl = connectUrl;
+
+                            if (!string.IsNullOrWhiteSpace(rememberedTwitchUrl) &&
+                                string.Equals(connectUrl, rememberedTwitchUrl, StringComparison.OrdinalIgnoreCase))
+                            {
+                                AppLogger.Info("TwitchSelection", $"Remembered Twitch streamer accepted for campaign '{campaign.Name}': {connectUrl}");
+                            }
+
+                            break;
                         }
 
-                        break;
+                        AppLogger.Warn("TwitchSelection", $"Twitch URL category mismatch for campaign '{campaign.Name}'. url='{connectUrl}', categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
                     }
-
-                    AppLogger.Warn("TwitchSelection", $"Twitch URL category mismatch for campaign '{campaign.Name}'. url='{connectUrl}', categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
                 }
             }
             else
