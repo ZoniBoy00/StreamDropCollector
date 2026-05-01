@@ -1,7 +1,7 @@
 {
   "version": "1.0.18",
   "type": "Feature",
-  "changelog": "Added missing Kick campaigns for site wide drops.",
+  "changelog": "Added missing Kick campaigns for site wide drops & big improvements on Twitch drops loading + Image caching for all sites.",
   "historic_versions": [
     {
       "version": "1.0.17",
