@@ -273,11 +273,15 @@ namespace Core.Managers
                 List<DropsReward> updatedRewards = new List<DropsReward>(campaign.Rewards.Count);
                 foreach (DropsReward reward in campaign.Rewards)
                 {
-                    int newProgress = reward.ProgressMinutes + minutesToAdd;
+                    int newProgress = reward.IsClaimed || reward.ProgressMinutes >= reward.RequiredMinutes
+                        ? reward.ProgressMinutes
+                        : Math.Min(reward.ProgressMinutes + minutesToAdd, reward.RequiredMinutes);
+
                     updatedRewards.Add(reward with { ProgressMinutes = newProgress });
                 }
 
                 VerboseLog("MinuteTick", $"campaignId={campaign.Id}, platform={campaign.Platform}, minutesAdded={minutesToAdd}, rewardsUpdated={campaign.Rewards.Count}, unclaimedRewards={campaign.Rewards.Count(r => !r.IsClaimed)}");
+                VerboseLog("RewardTransition", $"platform={platform}, campaignId={campaignId}, minutesAdded={minutesToAdd}, rewards={string.Join(", ", updatedRewards.Select(r => $"{r.Name}:{r.ProgressMinutes}/{r.RequiredMinutes}(claimed={r.IsClaimed})"))}");
 
                 DropsCampaign updatedCampaign = campaign with { Rewards = updatedRewards };
                 ActiveCampaigns[campaignIndex] = updatedCampaign;
@@ -307,6 +311,13 @@ namespace Core.Managers
                 _twitchWatchedSeconds++;
                 _twitchDropWatchedSeconds++;
 
+                DropsReward? nextTwitchReward = currentTwitchCampaign.Rewards
+                    .Where(r => !r.IsClaimed)
+                    .OrderBy(r => r.RequiredMinutes)
+                    .FirstOrDefault();
+
+                VerboseLog("DropPointer", $"Twitch nextReward={nextTwitchReward?.Name ?? "none"}, nextRewardId={nextTwitchReward?.Id ?? "none"}, requiredMinutes={nextTwitchReward?.RequiredMinutes ?? 0}, dropWatchedSeconds={_twitchDropWatchedSeconds}");
+
                 int twitchMinuteBucket = _twitchWatchedSeconds / 60;
                 if (twitchMinuteBucket > _twitchAppliedMinuteBucket)
                 {
@@ -315,7 +326,7 @@ namespace Core.Managers
                     ApplyMinuteProgressToActiveCampaign(Platform.Twitch, currentTwitchCampaign.Id, minutesToApply);
                 }
 
-                byte twitchCampPct = CalculateLiveCampaignProgress(currentTwitchCampaign, _twitchWatchedSeconds);
+                byte twitchCampPct = CalculateLiveCampaignProgress(currentTwitchCampaign);
                 byte twitchDropPct = CalculateLiveDropProgress(currentTwitchCampaign, _twitchDropWatchedSeconds);
                 VerboseLog("LiveProgress", $"Twitch tick campaignId={currentTwitchCampaign.Id}, campaignWatchedSeconds={_twitchWatchedSeconds}, dropWatchedSeconds={_twitchDropWatchedSeconds}, campaignPct={twitchCampPct}, dropPct={twitchDropPct}");
                 TwitchProgressChanged?.Invoke(twitchCampPct, twitchDropPct);
@@ -327,6 +338,13 @@ namespace Core.Managers
                 _kickWatchedSeconds++;
                 _kickDropWatchedSeconds++;
 
+                DropsReward? nextKickReward = currentKickCampaign.Rewards
+                    .Where(r => !r.IsClaimed)
+                    .OrderBy(r => r.RequiredMinutes)
+                    .FirstOrDefault();
+
+                VerboseLog("DropPointer", $"Kick nextReward={nextKickReward?.Name ?? "none"}, nextRewardId={nextKickReward?.Id ?? "none"}, requiredMinutes={nextKickReward?.RequiredMinutes ?? 0}, dropWatchedSeconds={_kickDropWatchedSeconds}");
+
                 int kickMinuteBucket = _kickWatchedSeconds / 60;
                 if (kickMinuteBucket > _kickAppliedMinuteBucket)
                 {
@@ -335,7 +353,7 @@ namespace Core.Managers
                     ApplyMinuteProgressToActiveCampaign(Platform.Kick, currentKickCampaign.Id, minutesToApply);
                 }
 
-                byte kickCampPct = CalculateLiveCampaignProgress(currentKickCampaign, _kickWatchedSeconds);
+                byte kickCampPct = CalculateLiveCampaignProgress(currentKickCampaign);
                 byte kickDropPct = CalculateLiveDropProgress(currentKickCampaign, _kickDropWatchedSeconds);
                 VerboseLog("LiveProgress", $"Kick tick campaignId={currentKickCampaign.Id}, campaignWatchedSeconds={_kickWatchedSeconds}, dropWatchedSeconds={_kickDropWatchedSeconds}, campaignPct={kickCampPct}, dropPct={kickDropPct}");
                 KickProgressChanged?.Invoke(kickCampPct, kickDropPct);
@@ -428,34 +446,23 @@ namespace Core.Managers
         /// equal to 0.</param>
         /// <returns>A value between 0 and 100 representing the percentage of overall campaign completion.
         /// Returns 100 if all rewards are already claimed or if total required time is zero.</returns>
-        private static byte CalculateLiveCampaignProgress(DropsCampaign? campaign, int totalWatchedSeconds)
+        private static byte CalculateLiveCampaignProgress(DropsCampaign? campaign)
         {
             if (campaign == null)
                 return 0;
 
             // Total required minutes across ALL rewards (claimed + unclaimed)
-            int totalRequiredMinutes = campaign.Rewards
-                .Sum(r => r.RequiredMinutes);
+            int totalRequiredMinutes = campaign.Rewards.Sum(r => r.RequiredMinutes);
 
             if (totalRequiredMinutes == 0)
                 return 100; // No requirements → done
 
-            // Sum required minutes only for claimed rewards (full credit for these)
-            int claimedRequiredMinutes = campaign.Rewards
-                .Where(r => r.IsClaimed)
-                .Sum(r => r.RequiredMinutes);
+            
+            int effectiveMinutes = campaign.Rewards.Sum(r => Math.Min(r.ProgressMinutes, r.RequiredMinutes));
 
-            // Convert watched seconds to minutes for cleaner math
-            double watchedMinutes = totalWatchedSeconds / 60.0;
-
-            // Effective completed minutes = fully claimed parts + current progress on the rest
-            double effectiveCompletedMinutes = claimedRequiredMinutes + watchedMinutes;
-
-            // Prevent overflow if user has watched way more than needed
-            effectiveCompletedMinutes = Math.Min(effectiveCompletedMinutes, totalRequiredMinutes);
-
-            double percentage = (effectiveCompletedMinutes / totalRequiredMinutes) * 100;
+            double percentage = (double)effectiveMinutes / totalRequiredMinutes * 100;
             return (byte)Math.Clamp((int)Math.Floor(percentage), 0, 100);
+
         }
         /// <summary>
         /// Calculates the progress percentage toward the next unclaimed live drop reward in the specified campaign.
@@ -530,8 +537,8 @@ namespace Core.Managers
                 TwitchProgressChanged?.Invoke(0, 0);
                 KickChannelChanged?.Invoke(string.Empty);
                 KickProgressChanged?.Invoke(0, 0);
-                _twitchAppliedMinuteBucket = 0;
-                _kickAppliedMinuteBucket = 0;
+                _twitchAppliedMinuteBucket = _twitchWatchedSeconds / 60;
+                _kickAppliedMinuteBucket = _kickWatchedSeconds / 60;
 
                 VerboseLog("StartWatching", $"AFTER reset | twitchApplied={_twitchAppliedMinuteBucket} | kickApplied={_kickAppliedMinuteBucket}");
 
@@ -611,7 +618,8 @@ namespace Core.Managers
                     NotificationManager.ShowNotification("Drop Ready to Claim", $"You have {readyToClaimRewards.Count} drops rewards ready to claim. Please claim them manually.");
                 }
 
-                if (!ActiveCampaigns.Any(c => c.HasProgressToMake()))
+                List<DropsCampaign> snapshot = [.. ActiveCampaigns];
+                if (!snapshot.Any(c => c.HasProgressToMake()))
                 {
                     AppLogger.Debug("Miner", "[DropsInventoryManager] No campaigns with progress to make after claim. Stopping stream watching.");
                     AppLogger.Info("Miner", "No campaigns with progress after claim pass; switching to Idle.");
@@ -626,12 +634,12 @@ namespace Core.Managers
                     return;
 
                 // Group campaigns by platform
-                List<DropsCampaign> twitchCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Twitch && c.HasProgressToMake())];
-                List<DropsCampaign> kickCampaigns = [.. ActiveCampaigns.Where(c => c.Platform == Platform.Kick && c.HasProgressToMake())];
+                List<DropsCampaign> twitchCampaigns = snapshot.Where(c => c.Platform == Platform.Twitch && c.HasProgressToMake()).ToList();
+                List<DropsCampaign> kickCampaigns = snapshot.Where(c => c.Platform == Platform.Kick && c.HasProgressToMake()).ToList();
 
-                // ────────────────────────────────────────────────────────────────
+                // ----------------------------------------------------------------
                 // Twitch handling
-                // ────────────────────────────────────────────────────────────────
+                // ----------------------------------------------------------------
                 if (twitchCampaigns.Count != 0 && TwitchWebView != null)
                 {
                     if (token.IsCancellationRequested)
@@ -683,15 +691,18 @@ namespace Core.Managers
 
                         // Sync baseline NOW - right after selection, before any further logic
                         _twitchWatchedSeconds = bestTwitch.Rewards
-                            .Where(r => !r.IsClaimed)
-                            .Sum(r => r.ProgressMinutes * 60);
+                            .Sum(r => Math.Min(r.ProgressMinutes, r.RequiredMinutes) * 60);
 
                         DropsReward? nextTwitchReward = bestTwitch.Rewards
                             .Where(r => !r.IsClaimed)
                             .OrderBy(r => r.RequiredMinutes)
                             .FirstOrDefault();
 
-                        _twitchDropWatchedSeconds = nextTwitchReward?.ProgressMinutes * 60 ?? 0;
+                        int twitchMinutesBeforeNextReward = bestTwitch.Rewards
+                            .Where(r => !r.IsClaimed && r.RequiredMinutes < nextTwitchReward!.RequiredMinutes)
+                            .Sum(r => r.RequiredMinutes);
+                        _twitchDropWatchedSeconds = Math.Max(0, (nextTwitchReward?.ProgressMinutes ?? 0) - twitchMinutesBeforeNextReward) * 60;
+
                         _twitchAppliedMinuteBucket = _twitchWatchedSeconds / 60;
 
                         VerboseLog("SelectionBaseline",
@@ -703,7 +714,7 @@ namespace Core.Managers
 
                         VerboseLog("SelectionBaseline", $"Twitch campaignId={bestTwitch.Id}, campaignWatchedSecondsBaseline={_twitchWatchedSeconds}, dropWatchedSecondsBaseline={_twitchDropWatchedSeconds}, nextRewardId={nextTwitchReward?.Id ?? "none"}, unclaimedRewards={bestTwitch.Rewards.Count(r => !r.IsClaimed)}");
 
-                        byte initialTwitchPct = CalculateLiveCampaignProgress(bestTwitch, _twitchWatchedSeconds);
+                        byte initialTwitchPct = CalculateLiveCampaignProgress(bestTwitch);
                         byte initialTwitchDropPct = CalculateLiveDropProgress(bestTwitch, _twitchDropWatchedSeconds);
                         TwitchProgressChanged?.Invoke(initialTwitchPct, initialTwitchDropPct);
 
@@ -732,9 +743,9 @@ namespace Core.Managers
                     }
                 }
 
-                // ────────────────────────────────────────────────────────────────
+                // ----------------------------------------------------------------
                 // Kick handling
-                // ────────────────────────────────────────────────────────────────
+                // ----------------------------------------------------------------
                 if (kickCampaigns.Count != 0 && KickWebView != null)
                 {
                     if (token.IsCancellationRequested)
@@ -785,20 +796,23 @@ namespace Core.Managers
                         UpdateCurrentSelectionFlags();
 
                         _kickWatchedSeconds = bestKick.Rewards
-                            .Where(r => !r.IsClaimed)
-                            .Sum(r => r.ProgressMinutes * 60);
+                            .Sum(r => Math.Min(r.ProgressMinutes, r.RequiredMinutes) * 60);
 
                         DropsReward? nextKickReward = bestKick.Rewards
                             .Where(r => !r.IsClaimed)
                             .OrderBy(r => r.RequiredMinutes)
                             .FirstOrDefault();
 
-                        _kickDropWatchedSeconds = nextKickReward?.ProgressMinutes * 60 ?? 0;
+                        int kickMinutesBeforeNextReward = bestKick.Rewards
+                            .Where(r => !r.IsClaimed && r.RequiredMinutes < nextKickReward!.RequiredMinutes)
+                            .Sum(r => r.RequiredMinutes);
+                        _kickDropWatchedSeconds = Math.Max(0, (nextKickReward?.ProgressMinutes ?? 0) - kickMinutesBeforeNextReward) * 60;
+
                         _kickAppliedMinuteBucket = _kickWatchedSeconds / 60;
 
                         VerboseLog("SelectionBaseline", $"Kick campaignId={bestKick.Id}, campaignWatchedSecondsBaseline={_kickWatchedSeconds}, dropWatchedSecondsBaseline={_kickDropWatchedSeconds}, nextRewardId={nextKickReward?.Id ?? "none"}, unclaimedRewards={bestKick.Rewards.Count(r => !r.IsClaimed)}");
 
-                        byte initialKickPct = CalculateLiveCampaignProgress(bestKick, _kickWatchedSeconds);
+                        byte initialKickPct = CalculateLiveCampaignProgress(bestKick);
                         byte initialKickDropPct = CalculateLiveDropProgress(bestKick, _kickDropWatchedSeconds);
                         KickProgressChanged?.Invoke(initialKickPct, initialKickDropPct);
 
@@ -994,8 +1008,8 @@ namespace Core.Managers
                     bool kickOnline = _currentKickCampaign != null && await IsKickStreamOnline();
                     bool kickCorrectCategory = _currentKickCampaign != null && await IsKickStreamCategoryCorrect();
 
-                    AppLogger.Debug("HealthCheck", $"[Health Check] Twitch: {(twitchOnline ? "ONLINE" : "OFFLINE")} | Kick: {(kickOnline ? "ONLINE" : "OFFLINE")}");
-                    AppLogger.Debug("HealthCheck", $"[Health Check] Twitch category correct: {twitchCorrectCategory} | Kick category correct: {kickCorrectCategory} | Twitch showing ad: {twitchShowingAd}");
+                    AppLogger.Debug("HealthCheck", $"Twitch: {(twitchOnline ? "ONLINE" : "OFFLINE")} | Kick: {(kickOnline ? "ONLINE" : "OFFLINE")}");
+                    AppLogger.Debug("HealthCheck", $"Twitch category correct: {twitchCorrectCategory} | Kick category correct: {kickCorrectCategory} | Twitch showing ad: {twitchShowingAd}");
                     AppLogger.Info("HealthCheck", $"Twitch online={twitchOnline}, categoryOk={twitchCorrectCategory}, showingAd={twitchShowingAd}; Kick online={kickOnline}, categoryOk={kickCorrectCategory}");
 
                     // Group campaigns by platform
@@ -1019,7 +1033,7 @@ namespace Core.Managers
                         if (!kickOnline)
                             _lastKnownKickOnlineState = false;
 
-                        AppLogger.Debug("HealthCheck", "[Health Check] Stream unhealthy -> forcing re-evaluation");
+                        AppLogger.Debug("HealthCheck", "Stream unhealthy -> forcing re-evaluation");
                         AppLogger.Warn("HealthCheck", $"Forcing re-evaluation. twitchOnline={twitchOnline}, twitchCategoryOk={twitchCorrectCategory}, twitchAd={twitchShowingAd}, kickOnline={kickOnline}, kickCategoryOk={kickCorrectCategory}");
                         _streamHealthTimer?.Stop();
                         await StartWatchingStreams(true); // This will restart everything safely
@@ -1388,26 +1402,39 @@ namespace Core.Managers
                     return categoryElement ? categoryElement.href.trim() : '';
                 })();
             ";
+            string getFirstStreamerFromDirectoryJs;
 
-            string getFirstStreamerFromDirectoryJs = $@"
-                (() => {{
-                    const titles = document.querySelectorAll('h3.text-base.font-bold.leading-5');
-                    if (titles.length === 0) return '';
-                    let targetSection = null;
-                    for (const h3 of titles) {{
-                        if (h3.innerText.includes('{campaign.Name.Replace("'", "\\'")}')) {{
-                            targetSection = h3.closest('section') || h3.parentElement.parentElement.parentElement.parentElement;
-                            break;
+            if (string.IsNullOrEmpty(campaign.Slug))
+            {
+                getFirstStreamerFromDirectoryJs = $@"
+                    (() => {{
+                        const link = document.querySelectorAll('section>div.group\\/card>a')[0].href
+                        return link ? link.trim() : '';
+                    }})();
+                ";
+            }
+            else
+            {
+                getFirstStreamerFromDirectoryJs = $@"
+                    (() => {{
+                        const titles = document.querySelectorAll('h3.text-base.font-bold.leading-5');
+                        if (titles.length === 0) return '';
+                        let targetSection = null;
+                        for (const h3 of titles) {{
+                            if (h3.innerText.includes('{campaign.Name.Replace("'", "\\'")}')) {{
+                                targetSection = h3.closest('section') || h3.parentElement.parentElement.parentElement.parentElement;
+                                break;
+                            }}
                         }}
-                    }}
-                    if (!targetSection) return '';
-                    const streamGrid = targetSection.querySelector(':scope > div:nth-child(2)') || targetSection.children[1];
-                    if (!streamGrid || streamGrid.children.length === 0) return '';
-                    const firstCard = streamGrid.children[0];
-                    const link = firstCard.querySelector('a');
-                    return link ? link.href.trim() : '';
-                }})();
-            ";
+                        if (!targetSection) return '';
+                        const streamGrid = targetSection.querySelector(':scope > div:nth-child(2)') || targetSection.children[1];
+                        if (!streamGrid || streamGrid.children.length === 0) return '';
+                        const firstCard = streamGrid.children[0];
+                        const link = firstCard.querySelector('a');
+                        return link ? link.href.trim() : '';
+                    }})();
+                ";
+            }
 
             if (!campaign.IsGeneralDrop)
             {
@@ -1482,8 +1509,7 @@ namespace Core.Managers
 
                     await Task.Delay(1500);  // Again - consider WaitForNetworkIdleAsync if needed
 
-                    string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () =>
-                        await KickWebView!.ExecuteScriptAsync(getFirstStreamerFromDirectoryJs));
+                    string firstStreamerRawResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await KickWebView!.ExecuteScriptAsync(getFirstStreamerFromDirectoryJs));
 
                     streamerUrl = firstStreamerRawResult?.Trim().Trim('"') ?? string.Empty;
 
@@ -1555,27 +1581,73 @@ namespace Core.Managers
                         .Distinct(StringComparer.OrdinalIgnoreCase);
                 }
 
-                foreach (string connectUrl in orderedConnectUrls)
+                // If there are many ConnectUrls, batch-check live status via GQL
+                // instead of navigating the WebView one by one
+                const int webViewThreshold = 10;
+                if (campaign.ConnectUrls.Count > webViewThreshold)
                 {
-                    await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(connectUrl));
-                    await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
+                    AppLogger.Info("TwitchSelection", $"Campaign '{campaign.Name}' has {campaign.ConnectUrls.Count} ConnectUrls - using batch GQL live check.");
 
-                    string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+                    List<string> loginNames = orderedConnectUrls
+                        .Select(GetStreamerNameFromUrl)
+                        .Where(l => !string.IsNullOrWhiteSpace(l))
+                        .ToList();
 
-                    if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                    List<string> liveLogins = await _twitchGqlService!.QueryLiveChannelsBySlugAsync(loginNames, campaign.Slug);
+
+                    if (liveLogins.Count == 0)
                     {
-                        streamerUrl = connectUrl;
+                        AppLogger.Warn("TwitchSelection", $"No live streamers found for campaign '{campaign.Name}' via batch GQL.");
+                    }
+                    else
+                    {
+                        AppLogger.Info("TwitchSelection", $"Batch GQL found {liveLogins.Count} live streamers for '{campaign.Name}'. Trying in order.");
 
-                        if (!string.IsNullOrWhiteSpace(rememberedTwitchUrl) &&
-                            string.Equals(connectUrl, rememberedTwitchUrl, StringComparison.OrdinalIgnoreCase))
+                        foreach (string login in liveLogins)
                         {
-                            AppLogger.Info("TwitchSelection", $"Remembered Twitch streamer accepted for campaign '{campaign.Name}': {connectUrl}");
+                            string url = $"https://www.twitch.tv/{login}";
+
+                            await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(url));
+                            await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
+
+                            string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+
+                            if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                            {
+                                streamerUrl = url;
+                                AppLogger.Info("TwitchSelection", $"Batch GQL streamer accepted for campaign '{campaign.Name}': {url}");
+                                break;
+                            }
+
+                            AppLogger.Warn("TwitchSelection", $"Batch GQL streamer category mismatch for '{campaign.Name}': {url}");
+                        }
+                    }
+                }
+                else
+                {
+                    // Original sequential WebView path for small ConnectUrl lists
+                    foreach (string connectUrl in orderedConnectUrls)
+                    {
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.NavigateAsync(connectUrl));
+                        await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.WaitForNetworkIdleAsync(5000, 500));
+
+                        string categoryHrefResult = await await Application.Current.Dispatcher.InvokeAsync(async () => await TwitchWebView!.ExecuteScriptAsync(getStreamerCategoryHrefJs));
+
+                        if (TwitchCategoryHrefMatchesCampaign(categoryHrefResult, campaign.Slug))
+                        {
+                            streamerUrl = connectUrl;
+
+                            if (!string.IsNullOrWhiteSpace(rememberedTwitchUrl) &&
+                                string.Equals(connectUrl, rememberedTwitchUrl, StringComparison.OrdinalIgnoreCase))
+                            {
+                                AppLogger.Info("TwitchSelection", $"Remembered Twitch streamer accepted for campaign '{campaign.Name}': {connectUrl}");
+                            }
+
+                            break;
                         }
 
-                        break;
+                        AppLogger.Warn("TwitchSelection", $"Twitch URL category mismatch for campaign '{campaign.Name}'. url='{connectUrl}', categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
                     }
-
-                    AppLogger.Warn("TwitchSelection", $"Twitch URL category mismatch for campaign '{campaign.Name}'. url='{connectUrl}', categoryHrefs='{categoryHrefResult.Trim().Trim('"')}', slug='{campaign.Slug}'");
                 }
             }
             else
@@ -1666,8 +1738,10 @@ namespace Core.Managers
         }
         private static bool KickCategoryHrefMatchesCampaign(string? rawCategoryHrefs, string? campaignSlug)
         {
-            if (string.IsNullOrWhiteSpace(rawCategoryHrefs) || string.IsNullOrWhiteSpace(campaignSlug))
+            if (string.IsNullOrWhiteSpace(rawCategoryHrefs))
                 return false;
+            else if (string.IsNullOrWhiteSpace(campaignSlug))
+                return true;
 
             string expectedCategoryPath = $"/category/{campaignSlug}";
             string hrefs = rawCategoryHrefs.Trim().Trim('"');

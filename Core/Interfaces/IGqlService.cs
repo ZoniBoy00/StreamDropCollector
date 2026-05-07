@@ -37,6 +37,15 @@ namespace Core.Interfaces
         /// <returns>A task that represents the asynchronous operation. The task result contains a string hash of the current
         /// drop campaign details.</returns>
         Task<string> GetCurrentDropCampaignDetailsHashAsync(CancellationToken ct = default);
+        /// <summary>
+        /// Batch-checks which of the provided channel logins are live and streaming the specified game slug.
+        /// Channels are queried in parallel batches to avoid sequential WebView navigation.
+        /// </summary>
+        /// <param name="channelLogins">List of channel login names to check.</param>
+        /// <param name="gameSlug">The game slug to filter by (e.g. "delta-force-hawk-ops").</param>
+        /// <param name="ct">Cancellation token.</param>
+        /// <returns>Ordered list of channel login names that are live and streaming the correct game.</returns>
+        Task<List<string>> QueryLiveChannelsBySlugAsync(IReadOnlyList<string> channelLogins, string gameSlug, CancellationToken ct = default);
         string UserId { set; }
     }
 }
